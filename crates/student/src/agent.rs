@@ -5,7 +5,7 @@ use crate::{capture, config, features, lock};
 use anyhow::Result;
 use labctl_common::net::{read_frame, write_frame};
 use labctl_common::policy::Policy;
-use labctl_common::protocol::{Body, ClientStatus, Command, Envelope, Report};
+use labctl_common::protocol::{Body, ClientStatus, Command, Envelope, Report, ScreenThumbnail};
 use labctl_common::{DEFAULT_PORT, DISCOVERY_MAGIC, DISCOVERY_PORT};
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
@@ -61,7 +61,7 @@ pub async fn run(shutdown: ShutdownSignal) -> Result<()> {
 
     tokio::task::spawn_blocking(move || {
         tracing::info!(revision = policy.revision, "applying startup policy");
-        features::apply_policy(&policy);
+        let _ = features::apply_policy(&policy);
     });
 
     let discovery = spawn_discovery(state.clone());
@@ -114,8 +114,11 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
             Err(e) => Report::Error { command: "launch_client_ui".into(), message: e.to_string() },
         },
         Command::RequestThumbnail { max_dim } => {
-            match capture::capture_thumbnail(state.machine_id, max_dim.clamp(64, 1920)) {
-                Ok(t) => Report::Thumbnail(t),
+            let id = state.machine_id;
+            let max_dim = max_dim.clamp(64, 1920);
+            match tokio::task::spawn_blocking(move || thumbnail(id, max_dim)).await {
+                Ok(Ok(t)) => Report::Thumbnail(t),
+                Ok(Err(e)) => Report::Error { command: "request_thumbnail".into(), message: e.to_string() },
                 Err(e) => Report::Error { command: "request_thumbnail".into(), message: e.to_string() },
             }
         }
@@ -159,11 +162,17 @@ async fn apply_push(state: &State, mut incoming: Policy) -> Report {
     let snapshot = guard.clone();
     drop(guard);
     let snap2 = snapshot.clone();
-    let _ = tokio::task::spawn_blocking(move || features::apply_policy(&snap2)).await;
+    let errors = tokio::task::spawn_blocking(move || features::apply_policy(&snap2))
+        .await
+        .unwrap_or_default();
     if let Err(e) = config::save(&snapshot) {
         return Report::Error { command: "push_policy".into(), message: e.to_string() };
     }
-    Report::Ack { command: "push_policy".into(), note: Some(format!("applied rev {}", snapshot.revision)) }
+    let mut note = format!("applied rev {}", snapshot.revision);
+    if !errors.is_empty() {
+        note = format!("{note}；部分失败：{}", errors.join("；"));
+    }
+    Report::Ack { command: "push_policy".into(), note: Some(note) }
 }
 
 async fn status(state: &State) -> ClientStatus {
@@ -172,9 +181,10 @@ async fn status(state: &State) -> ClientStatus {
         machine_id: state.machine_id,
         hostname: hostname(),
         ip: String::new(), // filled in by the console from the socket
-        logged_in_user: std::env::var("USERNAME").ok(),
+        logged_in_user: console_user(),
         policy_revision: policy.revision,
         uwf_enabled: features::current_uwf_enabled(),
+        uwf_state: Some(features::uwf_state()),
         session_locked: lock::configured_hash().is_some(),
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
     }
@@ -213,15 +223,90 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
+/// The user signed in at the console. The service itself runs as SYSTEM
+/// (its USERNAME is the machine account), so ask WMI instead.
+#[cfg(windows)]
+fn console_user() -> Option<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename = "Win32_ComputerSystem")]
+    #[allow(non_snake_case)]
+    struct ComputerSystem {
+        UserName: Option<String>,
+    }
+    let com = wmi::COMLibrary::new().ok()?;
+    let wmi = wmi::WMIConnection::new(com).ok()?;
+    let rows: Vec<ComputerSystem> = wmi.query().ok()?;
+    let full = rows.into_iter().next()?.UserName?;
+    Some(full.rsplit('\\').next().unwrap_or(&full).to_string())
+}
+
+#[cfg(not(windows))]
+fn console_user() -> Option<String> {
+    std::env::var("USER").ok()
+}
+
+/// Screen thumbnail of the signed-in user's desktop.
+///
+/// The service runs in session 0, which cannot see the user's desktop, so
+/// the GUI (running in that session) captures it. Capturing directly only
+/// works when the agent itself runs in a user session (`run` mode).
+fn thumbnail(machine_id: Uuid, max_dim: u32) -> Result<ScreenThumbnail> {
+    match thumbnail_from_ui(max_dim) {
+        Ok(mut t) => {
+            t.machine_id = machine_id;
+            Ok(t)
+        }
+        Err(e) if in_session_zero() => {
+            anyhow::bail!("学生端界面未运行，无法获取画面（{e}）")
+        }
+        Err(_) => capture::capture_thumbnail(machine_id, max_dim),
+    }
+}
+
+fn thumbnail_from_ui(max_dim: u32) -> Result<ScreenThumbnail> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let mut s = std::net::TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, labctl_common::UI_CONTROL_PORT).into(),
+        Duration::from_millis(500),
+    )?;
+    s.set_read_timeout(Some(Duration::from_secs(5)))?;
+    s.write_all(format!("thumb {max_dim}").as_bytes())?;
+    s.shutdown(std::net::Shutdown::Write)?;
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf)?;
+    anyhow::ensure!(!buf.is_empty(), "客户端界面没有返回画面");
+    Ok(serde_json::from_slice(&buf)?)
+}
+
+/// True for services, which run in the non-interactive session 0.
+#[cfg(windows)]
+fn in_session_zero() -> bool {
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    let mut session = 0u32;
+    let ok = unsafe { ProcessIdToSessionId(std::process::id(), &mut session) }.is_ok();
+    ok && session == 0
+}
+
+#[cfg(not(windows))]
+fn in_session_zero() -> bool {
+    false
+}
+
 fn launch_ui() -> Result<()> {
-    // Start the GUI (same binary, ui mode) if not already running.
-    // It lives next to this agent executable. A second launch simply signals
-    // the existing tray instance to show itself, so this is idempotent.
-    //
-    // Note: when the agent runs as a session-0 service, a plain spawn won't
-    // surface in the interactive desktop; the GUI's logon autostart is the
-    // primary path, and this is a best-effort nudge.
-    // The GUI is the same binary in `ui` mode.
+    // If the tray GUI is running, ask it to show itself. A process spawned
+    // by the session-0 service would never appear on the student's desktop.
+    {
+        use std::io::Write;
+        let addr = (std::net::Ipv4Addr::LOCALHOST, labctl_common::UI_CONTROL_PORT).into();
+        if let Ok(mut s) = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)) {
+            s.write_all(b"show")?;
+            return Ok(());
+        }
+    }
+    anyhow::ensure!(!in_session_zero(), "学生端界面未运行（它会在学生登录时自动启动）");
+    // Running in a user session (`run` mode): start the GUI (same binary,
+    // ui mode) next to this executable.
     let exe = std::env::current_exe()?;
     std::process::Command::new(exe).args(["ui", "--show"]).spawn()?;
     Ok(())

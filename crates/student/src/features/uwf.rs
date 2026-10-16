@@ -9,8 +9,11 @@
 //! State is **read** through the documented WMI namespace
 //! `root\standardcimv2\embedded` (class `UWF_Filter`). State is **changed** via
 //! the in-box `uwfmgr.exe` CLI, which is present once the feature is installed.
-//! Enabling/disabling UWF only takes effect after the reboot UWF itself
-//! mandates; callers surface that to the operator.
+//!
+//! Turning protection on from scratch takes two reboots: the first completes
+//! the feature install (uwfmgr cannot be used before it), then the agent's
+//! startup policy run enables the filter, which applies on the second reboot.
+//! [`state`] reports where a machine is in that sequence.
 
 use anyhow::Result;
 use labctl_common::policy::UwfScope;
@@ -19,9 +22,17 @@ use labctl_common::policy::UwfScope;
 mod imp {
     use super::*;
     use serde::Deserialize;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
     use wmi::{COMLibrary, WMIConnection};
 
     const NS: &str = "root\\standardcimv2\\embedded";
+    const FEATURE: &str = "Client-UnifiedWriteFilter";
+
+    /// A background apply (possibly a long DISM install) is running.
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    /// Error from the most recent apply; cleared when one succeeds.
+    static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
     #[derive(Deserialize, Debug)]
     #[serde(rename = "UWF_Filter")]
@@ -33,6 +44,14 @@ mod imp {
         NextEnabled: Option<bool>,
     }
 
+    #[derive(Deserialize, Debug)]
+    #[serde(rename = "Win32_OptionalFeature")]
+    #[allow(non_snake_case)]
+    struct OptionalFeature {
+        /// 1 = enabled (or enabled pending reboot), 2 = disabled, 3 = absent.
+        InstallState: Option<u32>,
+    }
+
     fn query_filter() -> Result<UwfFilter> {
         let com = COMLibrary::new()?;
         let wmi = WMIConnection::with_namespace_path(NS, com)?;
@@ -42,19 +61,83 @@ mod imp {
             .ok_or_else(|| anyhow::anyhow!("UWF_Filter not present; feature not installed?"))
     }
 
+    /// The optional feature is marked enabled (it may still need a reboot).
+    fn feature_marked_enabled() -> bool {
+        let query = || -> Result<bool> {
+            let com = COMLibrary::new()?;
+            let wmi = WMIConnection::new(com)?;
+            let rows: Vec<OptionalFeature> = wmi.raw_query(format!(
+                "SELECT InstallState FROM Win32_OptionalFeature WHERE Name = '{FEATURE}'"
+            ))?;
+            Ok(rows.first().and_then(|f| f.InstallState) == Some(1))
+        };
+        query().unwrap_or(false)
+    }
+
     pub fn is_enabled() -> Result<bool> {
         Ok(query_filter()?.CurrentEnabled.unwrap_or(false))
     }
 
-    /// Ensure the optional feature is installed, then enable/disable via
-    /// `uwfmgr`. When enabling, also set which volumes are protected (and thus
-    /// restored on reboot) per `scope`. Returns immediately; the change needs a
-    /// reboot to apply.
-    pub fn apply(enabled: bool, scope: UwfScope) -> Result<()> {
-        ensure_feature()?;
-        let sub = if enabled { "enable" } else { "disable" };
-        run("uwfmgr.exe", &["filter", sub])?;
+    /// Where this machine is in the enable/disable sequence (see the
+    /// `ClientStatus::uwf_state` doc for the values).
+    pub fn state() -> String {
+        if BUSY.load(Ordering::Relaxed) {
+            return "installing".into();
+        }
+        if let Some(e) = LAST_ERROR.lock().unwrap().clone() {
+            return format!("error:{e}");
+        }
+        match query_filter() {
+            Ok(f) => match (f.CurrentEnabled.unwrap_or(false), f.NextEnabled.unwrap_or(false)) {
+                (true, true) => "on",
+                (true, false) => "off_next_boot",
+                (false, true) => "on_next_boot",
+                (false, false) => "off",
+            }
+            .into(),
+            Err(_) if feature_marked_enabled() => "install_pending_reboot".into(),
+            Err(_) => "not_installed".into(),
+        }
+    }
 
+    /// Request the desired UWF state in the background and return at once:
+    /// installing the feature with DISM can take minutes, and the console
+    /// should not wait for it. Progress and errors show up in [`state`].
+    pub fn apply(enabled: bool, scope: UwfScope) -> Result<()> {
+        if BUSY.swap(true, Ordering::SeqCst) {
+            tracing::info!("UWF change already in progress; skipping");
+            return Ok(());
+        }
+        std::thread::spawn(move || {
+            let result = apply_now(enabled, scope);
+            if let Err(e) = &result {
+                tracing::error!(error = %e, "uwf policy failed");
+            }
+            *LAST_ERROR.lock().unwrap() = result.err().map(|e| e.to_string());
+            BUSY.store(false, Ordering::SeqCst);
+        });
+        Ok(())
+    }
+
+    fn apply_now(enabled: bool, scope: UwfScope) -> Result<()> {
+        if query_filter().is_err() {
+            if !enabled {
+                return Ok(()); // not installed means not protecting
+            }
+            if !feature_marked_enabled() {
+                tracing::info!("installing optional feature {FEATURE} via DISM");
+                run(
+                    "dism.exe",
+                    &["/Online", "/Enable-Feature", &format!("/FeatureName:{FEATURE}"), "/All", "/NoRestart"],
+                )?;
+            }
+            // uwfmgr only works after the reboot that finishes the install;
+            // the startup policy run after that reboot enables the filter.
+            tracing::info!("UWF feature installed; reboot required before it can be enabled");
+            return Ok(());
+        }
+
+        run("uwfmgr.exe", &["filter", if enabled { "enable" } else { "disable" }])?;
         if enabled {
             for vol in target_volumes(scope) {
                 // Protect each target volume; already-protected is not an error.
@@ -63,7 +146,6 @@ mod imp {
                 }
             }
         }
-
         tracing::info!(enabled, ?scope, "requested UWF state change (reboot required)");
         Ok(())
     }
@@ -107,25 +189,6 @@ mod imp {
         out
     }
 
-    fn ensure_feature() -> Result<()> {
-        // If the WMI class resolves, the feature is already installed.
-        if query_filter().is_ok() {
-            return Ok(());
-        }
-        tracing::info!("installing optional feature Client-UnifiedWriteFilter via DISM");
-        run(
-            "dism.exe",
-            &[
-                "/Online",
-                "/Enable-Feature",
-                "/FeatureName:Client-UnifiedWriteFilter",
-                "/All",
-                "/NoRestart",
-            ],
-        )?;
-        Ok(())
-    }
-
     pub fn reboot(restore: bool, delay_secs: u32) -> Result<()> {
         // When UWF is enabled, a plain reboot already discards the overlay,
         // returning the machine to its protected baseline — that *is* the
@@ -141,13 +204,36 @@ mod imp {
     fn run(exe: &str, args: &[&str]) -> Result<()> {
         let out = crate::hidden_command(exe).args(args).output()?;
         if !out.status.success() {
-            anyhow::bail!(
-                "{exe} {:?} failed: {}",
-                args,
-                String::from_utf8_lossy(&out.stderr)
-            );
+            // uwfmgr and DISM report errors on stdout, not stderr.
+            let msg = [out.stdout.as_slice(), out.stderr.as_slice()]
+                .iter()
+                .map(|b| decode_console(b))
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            anyhow::bail!("{exe} {} failed ({}): {}", args.join(" "), out.status, msg.trim());
         }
         Ok(())
+    }
+
+    /// Console tools print in the OEM code page (e.g. GBK on Chinese
+    /// Windows) or UTF-16; decode either into readable text.
+    fn decode_console(bytes: &[u8]) -> String {
+        if bytes.len() >= 2 && bytes.len() % 2 == 0 && bytes[1] == 0 {
+            let wide: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            return String::from_utf16_lossy(&wide);
+        }
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            return s.to_string();
+        }
+        use windows::Win32::Globalization::{MultiByteToWideChar, CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
+        let n = unsafe { MultiByteToWideChar(CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None) };
+        if n <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide = vec![0u16; n as usize];
+        unsafe { MultiByteToWideChar(CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut wide)) };
+        String::from_utf16_lossy(&wide)
     }
 }
 
@@ -156,6 +242,9 @@ mod imp {
     use super::*;
     pub fn is_enabled() -> Result<bool> {
         anyhow::bail!("UWF is Windows-only")
+    }
+    pub fn state() -> String {
+        "not_installed".into()
     }
     pub fn apply(enabled: bool, scope: UwfScope) -> Result<()> {
         tracing::info!(enabled, ?scope, "uwf apply (no-op on this platform)");
@@ -167,4 +256,4 @@ mod imp {
     }
 }
 
-pub use imp::{apply, is_enabled, reboot};
+pub use imp::{apply, is_enabled, reboot, state};

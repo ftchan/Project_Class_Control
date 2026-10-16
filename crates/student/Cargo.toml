@@ -38,6 +38,8 @@ windows = { version = "0.56.0", features = [
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_Globalization",
+    "Win32_System_RemoteDesktop",
 ] }
 xcap = "0.0.12"
 tray-icon = "0.19.2"

@@ -5,7 +5,7 @@
 //! Task Manager) in the interactive session. Talks to the local agent over
 //! loopback.
 
-mod ipc;
+pub(crate) mod ipc;
 mod store;
 mod userpolicy;
 
@@ -147,20 +147,31 @@ fn apply_policy_display(ui: &MainWindow, p: &Policy) {
         .into(),
     );
     ui.set_rev_text(format!("策略 rev {}", p.revision).into());
-    match p.uwf_enabled {
-        Some(true) => {
-            ui.set_uwf_on(true);
-            ui.set_uwf_text("已开启".into());
+    // What the teacher asked for; the live state from the agent replaces it.
+    ui.set_uwf_on(false);
+    ui.set_uwf_text(
+        match p.uwf_enabled {
+            Some(true) => "已下发开启",
+            Some(false) => "已下发关闭",
+            None => "未管理",
         }
-        Some(false) => {
-            ui.set_uwf_on(false);
-            ui.set_uwf_text("已关闭".into());
-        }
-        None => {
-            ui.set_uwf_on(false);
-            ui.set_uwf_text("未管理".into());
-        }
-    }
+        .into(),
+    );
+}
+
+/// Display text for `ClientStatus::uwf_state`, and whether it is protecting.
+fn uwf_label(state: &str) -> (String, bool) {
+    let text = match state {
+        "on" => "已开启（重启即还原）",
+        "on_next_boot" => "已设置，重启后生效",
+        "off_next_boot" => "重启后关闭",
+        "off" => "已关闭",
+        "installing" => "正在安装 UWF 功能…",
+        "install_pending_reboot" => "功能已安装，重启后启用",
+        "not_installed" => "未安装",
+        other => return (other.strip_prefix("error:").map_or(other.to_string(), |e| format!("出错：{e}")), false),
+    };
+    (text.to_string(), state == "on")
 }
 
 /// Refresh display: local policy immediately, live UWF/host from the agent.
@@ -173,9 +184,10 @@ fn refresh(ui: &MainWindow) {
         Ok(Report::Status(st)) => {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = back.upgrade() {
-                    if let Some(on) = st.uwf_enabled {
+                    if let Some(state) = st.uwf_state.as_deref() {
+                        let (text, on) = uwf_label(state);
                         ui.set_uwf_on(on);
-                        ui.set_uwf_text(if on { "已开启" } else { "已关闭" }.into());
+                        ui.set_uwf_text(text.into());
                     }
                     if !st.hostname.is_empty() {
                         ui.set_hostname(st.hostname.into());
@@ -310,7 +322,7 @@ fn show_and_lock(ui_w: &Weak<MainWindow>) {
 }
 
 fn spawn_control_listener(ui_w: Weak<MainWindow>) {
-    use std::io::Read;
+    use std::io::{Read, Write};
     match std::net::TcpListener::bind(("127.0.0.1", store::UI_CONTROL_PORT)) {
         Ok(listener) => {
             std::thread::spawn(move || {
@@ -321,11 +333,24 @@ fn spawn_control_listener(ui_w: Weak<MainWindow>) {
                     let _ = s.read_to_string(&mut buf);
                     let msg = buf.trim().to_string();
 
-                    if let Some(rest) = msg.strip_prefix("defaults") {
+                    if let Some(rest) = msg.strip_prefix("thumb") {
+                        // The agent (a session-0 service) cannot see this
+                        // desktop, so it asks us for the screen thumbnail.
+                        let max_dim = rest.trim().parse().unwrap_or(320);
+                        let reply = crate::capture::capture_thumbnail(uuid::Uuid::nil(), max_dim)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|t| Ok(serde_json::to_vec(&t)?));
+                        match reply {
+                            Ok(json) => {
+                                let _ = s.write_all(&json);
+                            }
+                            Err(e) => tracing::warn!(error = %e, "thumbnail capture failed"),
+                        }
+                    } else if let Some(rest) = msg.strip_prefix("defaults") {
                         let path = rest.trim().trim_start_matches('\t').trim();
                         let path = (!path.is_empty()).then(|| path.to_string());
                         std::thread::spawn(move || userpolicy::apply_defaults(path.as_deref()));
-                    } else {
+                    } else if msg == "show" {
                         let w = ui_w.clone();
                         let _ = slint::invoke_from_event_loop(move || show_and_lock(&w));
                     }

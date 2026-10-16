@@ -64,7 +64,7 @@ fn main() -> Result<()> {
         "uninstall" => return service::uninstall(),
         "doctor" => return doctor(),
         "ui" => {
-            init_tracing();
+            init_tracing(ui_log_file());
             let show = std::env::args().any(|a| a == "--show");
             return ui::run_gui(show);
         }
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
     }
 
     // Foreground run: set up logging and drive the agent on a Tokio runtime.
-    init_tracing();
+    init_tracing(Some(labctl_common::paths::log_dir().join("agent.log")));
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(agent::run(agent::ShutdownSignal::ctrl_c()))
 }
@@ -121,6 +121,16 @@ fn doctor() -> Result<()> {
         println!("[! ] 未找到策略文件：{}（将使用默认策略）", pf.display());
     }
 
+    // Ask the agent: it runs as SYSTEM and can read the UWF WMI namespace.
+    match ui::ipc::send(labctl_common::protocol::Command::QueryStatus) {
+        Ok(labctl_common::protocol::Report::Status(st)) => {
+            println!("[i ] 当前登录用户：{}", st.logged_in_user.as_deref().unwrap_or("（无）"));
+            println!("[i ] UWF 状态：{}", st.uwf_state.as_deref().unwrap_or("未知"));
+        }
+        _ => println!("[! ] 无法从 agent 读取状态（UWF 状态未知）"),
+    }
+    println!("[i ] 服务日志：{}", labctl_common::paths::log_dir().join("agent.log").display());
+
     println!();
     println!("提示：教师机看不到本机时，多为防火墙拦截 TCP {port} / UDP {}。",
         labctl_common::DISCOVERY_PORT);
@@ -143,8 +153,35 @@ pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::proce
     cmd
 }
 
-fn init_tracing() {
+/// Log to `file` when given (the service has no console, so without a file
+/// its errors would be lost), falling back to stderr if it cannot be opened.
+fn init_tracing(file: Option<std::path::PathBuf>) {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("LABCTL_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    if let Some(log) = file.and_then(|p| open_log(&p)) {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(log))
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    }
+}
+
+/// Open `path` for appending, keeping one previous file once it passes 2 MB.
+fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
+    const MAX_LOG: u64 = 2 * 1024 * 1024;
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    if std::fs::metadata(path).map(|m| m.len() > MAX_LOG).unwrap_or(false) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// The GUI runs as the signed-in user, who cannot write the service's log
+/// folder under ProgramData; it logs to the user's local app data instead.
+fn ui_log_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|d| std::path::PathBuf::from(d).join("LabCtl").join("ui.log"))
 }

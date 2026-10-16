@@ -39,7 +39,7 @@ fn service_main(_args: Vec<OsString>) {
 }
 
 fn run_service_inner() -> Result<()> {
-    crate::init_tracing();
+    crate::init_tracing(Some(labctl_common::paths::log_dir().join("agent.log")));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let mut shutdown_tx = Some(shutdown_tx);

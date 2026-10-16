@@ -20,6 +20,11 @@ pub struct ClientStatus {
     /// Current policy revision the client has applied.
     pub policy_revision: u64,
     pub uwf_enabled: Option<bool>,
+    /// Detailed UWF state, since enabling takes reboots:
+    /// "not_installed" | "installing" | "install_pending_reboot" | "off" |
+    /// "on_next_boot" | "on" | "off_next_boot" | "error:<message>".
+    #[serde(default)]
+    pub uwf_state: Option<String>,
     /// True while the foreground session is locked by our passphrase gate.
     pub session_locked: bool,
     pub agent_version: String,
