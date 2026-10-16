@@ -34,6 +34,9 @@ netsh advfirewall firewall delete rule name="LabCtl Agent (TCP 47800)"     2>$nu
 netsh advfirewall firewall delete rule name="LabCtl Discovery (UDP 47801)" 2>$null | Out-Null
 Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" `
   -Name "LabCtlStudentUI" -ErrorAction SilentlyContinue
+# older clients also wrote a per-user entry (current user only)
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
+  -Name "LabCtlStudentUI" -ErrorAction SilentlyContinue
 Stop-Process -Name "labctl-student" -Force -ErrorAction SilentlyContinue
 # Wait for the service/UI processes to exit so the exe is no longer locked.
 for ($i = 0; $i -lt 20 -and (Get-Process -Name "labctl-student" -ErrorAction SilentlyContinue); $i++) {

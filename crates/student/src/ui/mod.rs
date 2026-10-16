@@ -27,8 +27,8 @@ pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
     if store::signal_existing_instance() {
         return Ok(());
     }
-    if let Err(e) = store::ensure_autostart() {
-        tracing::warn!(error = %e, "could not register autostart");
+    if let Err(e) = store::clean_legacy_autostart() {
+        tracing::warn!(error = %e, "could not clean legacy autostart entry");
     }
 
     let ui = MainWindow::new()?;
@@ -58,7 +58,9 @@ pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
     if show_on_start {
         ui.show()?;
     }
-    slint::run_event_loop()?;
+    // Keep running with every window hidden: the client lives in the tray and
+    // must keep enforcing per-user policy. Only the tray "exit" item quits.
+    slint::run_event_loop_until_quit()?;
 
     drop(refresh_timer);
     drop(policy_timer);

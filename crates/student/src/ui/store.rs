@@ -76,21 +76,25 @@ pub fn signal_existing_instance() -> bool {
     }
 }
 
-/// Register this exe to start automatically at user logon (so the managed
-/// client is always present in the tray). Standard HKCU Run key; the user/admin
-/// can see and remove it in Task Manager → Startup.
+/// Logon autostart is registered machine-wide (HKLM Run, `exe ui`) by the
+/// installers. Older clients also wrote a per-user HKCU entry without the `ui`
+/// argument, which started a second foreground agent at every logon; remove it.
 #[cfg(windows)]
-pub fn ensure_autostart() -> Result<()> {
+pub fn clean_legacy_autostart() -> Result<()> {
     use winreg::enums::*;
     use winreg::RegKey;
-    let exe = std::env::current_exe()?;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (run, _) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")?;
-    run.set_value("LabCtlStudentUI", &format!("\"{}\"", exe.display()))?;
+    let run = hkcu.open_subkey_with_flags(
+        r"Software\Microsoft\Windows\CurrentVersion\Run",
+        KEY_QUERY_VALUE | KEY_SET_VALUE,
+    )?;
+    if run.get_raw_value("LabCtlStudentUI").is_ok() {
+        run.delete_value("LabCtlStudentUI")?;
+    }
     Ok(())
 }
 
 #[cfg(not(windows))]
-pub fn ensure_autostart() -> Result<()> {
+pub fn clean_legacy_autostart() -> Result<()> {
     Ok(())
 }
