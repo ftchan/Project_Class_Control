@@ -47,8 +47,6 @@ jobs:
           @echo off
           cd /d "%~dp0"
           start "" "labctl-teacher.exe"
-          timeout /t 2 >nul
-          start "" http://127.0.0.1:8080
           "@ | Set-Content -Path dist/LabCtl/启动教师端.bat -Encoding OEM
           Compress-Archive -Path dist/LabCtl -DestinationPath LabCtl-windows.zip -Force
 

@@ -58,8 +58,6 @@ try {
 @echo off
 cd /d "%~dp0"
 start "" "labctl-teacher.exe"
-timeout /t 2 >nul
-start "" http://127.0.0.1:8080
 "@ | Set-Content -Path (Join-Path $out "启动教师端.bat") -Encoding OEM
 
   $zip = Join-Path $root "dist\LabCtl-$ver.zip"
