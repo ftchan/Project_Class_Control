@@ -54,9 +54,13 @@ pub enum Command {
     RebootAndRestore { restore: bool, delay_secs: u32 },
 
     /// One-click "restore desktop defaults" for the signed-in user: default
-    /// mouse-cursor scheme, default desktop icon size, and (if a path is given
-    /// and exists) a default wallpaper. Applied by the GUI in the user session.
-    ApplyDefaults { wallpaper_path: Option<String> },
+    /// mouse-cursor scheme, default desktop icon size, and (if an image is
+    /// given) a default wallpaper. The image is transferred as bytes so the
+    /// student has a real local file. Applied by the GUI in the user session.
+    ApplyDefaults {
+        wallpaper_data_base64: Option<String>,
+        wallpaper_name: Option<String>,
+    },
 
     /// Push a new client executable and seamlessly update it: the agent writes
     /// the bytes, stops the running copy, swaps the file, and (if `run_after`)

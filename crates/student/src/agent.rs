@@ -47,16 +47,22 @@ pub async fn run(shutdown: ShutdownSignal) -> Result<()> {
     crate::firewall::ensure_rules();
 
     let policy = config::load();
-    tracing::info!(revision = policy.revision, "applying startup policy");
-    features::apply_policy(&policy);
 
     let state = Arc::new(State {
         machine_id: load_or_create_machine_id(),
-        policy: Mutex::new(policy),
+        policy: Mutex::new(policy.clone()),
     });
 
+    // Bind and start serving FIRST, so the console/GUI can always reach us
+    // quickly. Policy enforcement (which may run slow tools like netsh/DISM)
+    // happens afterwards on a blocking thread and never delays connectivity.
     let tcp = TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).await?;
     tracing::info!(port = DEFAULT_PORT, "agent listening");
+
+    tokio::task::spawn_blocking(move || {
+        tracing::info!(revision = policy.revision, "applying startup policy");
+        features::apply_policy(&policy);
+    });
 
     let discovery = spawn_discovery(state.clone());
     let accept = {
@@ -119,10 +125,13 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
                 Err(e) => Report::Error { command: "update_client".into(), message: e.to_string() },
             }
         }
-        Command::ApplyDefaults { wallpaper_path } => {
-            // Per-user settings are applied by the GUI in the interactive
-            // session; forward the request over the loopback control port.
-            match forward_defaults_to_ui(wallpaper_path.as_deref()) {
+        Command::ApplyDefaults { wallpaper_data_base64, wallpaper_name } => {
+            // Save any wallpaper image locally so the GUI gets a valid local
+            // path; per-user settings are applied by the GUI in the session.
+            let local = wallpaper_data_base64
+                .as_deref()
+                .and_then(|b| save_defaults_wallpaper(b, wallpaper_name.as_deref()));
+            match forward_defaults_to_ui(local.as_deref()) {
                 Ok(()) => Report::Ack { command: "apply_defaults".into(), note: Some("已下发到客户端".into()) },
                 Err(e) => Report::Error { command: "apply_defaults".into(), message: e.to_string() },
             }
@@ -137,14 +146,20 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
     }
 }
 
-async fn apply_push(state: &State, incoming: Policy) -> Report {
+async fn apply_push(state: &State, mut incoming: Policy) -> Report {
+    // Materialize any transferred wallpaper image to a LOCAL file and rewrite
+    // the path, so students never point at a teacher-only path (which blanks
+    // the desktop). Clears the bytes so policy.json stays small.
+    materialize_wallpaper(&mut incoming);
+
     let mut guard = state.policy.lock().await;
     if !guard.apply(incoming) {
         return Report::Ack { command: "push_policy".into(), note: Some("ignored older revision".into()) };
     }
     let snapshot = guard.clone();
     drop(guard);
-    features::apply_policy(&snapshot);
+    let snap2 = snapshot.clone();
+    let _ = tokio::task::spawn_blocking(move || features::apply_policy(&snap2)).await;
     if let Err(e) = config::save(&snapshot) {
         return Report::Error { command: "push_policy".into(), message: e.to_string() };
     }
@@ -285,6 +300,49 @@ fn update_client(
     }
 
     Ok(format!("已更新 {basename}（{} 字节）", bytes.len()))
+}
+
+/// If the policy carries wallpaper bytes, write them to a local file and set
+/// `wallpaper_path` to that file; then drop the bytes. No-op if absent.
+fn materialize_wallpaper(policy: &mut Policy) {
+    use base64::Engine as _;
+    let Some(b64) = policy.wallpaper_data_base64.take() else { return };
+    let name = policy.wallpaper_name.take().unwrap_or_else(|| "wallpaper.jpg".into());
+    let ext = std::path::Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg");
+    match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
+        Ok(bytes) if !bytes.is_empty() => {
+            let path = labctl_common::paths::data_dir().join(format!("wallpaper.{ext}"));
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if std::fs::write(&path, &bytes).is_ok() {
+                policy.wallpaper_path = Some(path.to_string_lossy().into_owned());
+                tracing::info!(?path, "materialized wallpaper locally");
+            }
+        }
+        _ => tracing::warn!("wallpaper payload empty/invalid"),
+    }
+}
+
+/// Write a defaults wallpaper payload to a local file; return its path.
+fn save_defaults_wallpaper(b64: &str, name: Option<&str>) -> Option<String> {
+    use base64::Engine as _;
+    let ext = name
+        .and_then(|n| std::path::Path::new(n).extension().and_then(|e| e.to_str()))
+        .unwrap_or("jpg");
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let path = labctl_common::paths::data_dir().join(format!("default-wallpaper.{ext}"));
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&path, &bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// Send the "restore defaults" request to the GUI client's control port.

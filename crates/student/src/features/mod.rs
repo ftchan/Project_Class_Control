@@ -2,7 +2,6 @@
 //! settings. On non-Windows builds the implementations are no-ops that log, so
 //! the crate still compiles and the networking/logic can be tested anywhere.
 
-pub mod wallpaper;
 pub mod usb;
 pub mod uwf;
 
@@ -13,9 +12,9 @@ use labctl_common::policy::Policy;
 /// logged but do not abort the rest, so a single unsupported setting cannot
 /// leave the machine half-configured.
 pub fn apply_policy(policy: &Policy) {
-    if let Err(e) = wallpaper::apply(policy.lock_wallpaper, policy.wallpaper_path.as_deref()) {
-        tracing::error!(error = %e, "wallpaper policy failed");
-    }
+    // Wallpaper is a per-user setting applied by the GUI client in the
+    // interactive session (the service runs in session 0, where HKCU is the
+    // system account and has no effect on the student's desktop).
     if let Err(e) = usb::apply(policy.usb_storage) {
         tracing::error!(error = %e, "usb storage policy failed");
     }

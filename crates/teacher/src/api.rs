@@ -92,10 +92,36 @@ async fn pick_wallpaper() -> impl IntoResponse {
     Json(json!({ "path": path })).into_response()
 }
 
+/// If the policy locks the wallpaper and names a path, read that image on the
+/// console machine and embed it as bytes, so every student gets a real local
+/// file instead of a teacher-only path (which would blank their desktop).
+fn embed_wallpaper(policy: &mut Policy) {
+    use base64::Engine as _;
+    if !policy.lock_wallpaper {
+        return;
+    }
+    let Some(path) = policy.wallpaper_path.clone() else { return };
+    if path.trim().is_empty() {
+        return;
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => {
+            policy.wallpaper_data_base64 =
+                Some(base64::engine::general_purpose::STANDARD.encode(&bytes));
+            policy.wallpaper_name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+        }
+        _ => tracing::warn!(%path, "could not read wallpaper file to embed"),
+    }
+}
+
 async fn policy_all(
     State(engine): State<Arc<Engine>>,
-    Json(policy): Json<Policy>,
+    Json(mut policy): Json<Policy>,
 ) -> impl IntoResponse {
+    embed_wallpaper(&mut policy);
     let results = engine.push_policy_all(policy).await;
     let body: Vec<_> = results
         .into_iter()
@@ -107,8 +133,9 @@ async fn policy_all(
 async fn policy_one(
     State(engine): State<Arc<Engine>>,
     Path(id): Path<Uuid>,
-    Json(policy): Json<Policy>,
+    Json(mut policy): Json<Policy>,
 ) -> impl IntoResponse {
+    embed_wallpaper(&mut policy);
     reply(engine.push_policy(id, policy).await)
 }
 
@@ -182,8 +209,23 @@ async fn apply_defaults(
     State(engine): State<Arc<Engine>>,
     Json(req): Json<DefaultsReq>,
 ) -> impl IntoResponse {
-    let wp = req.wallpaper_path.filter(|s| !s.trim().is_empty());
-    let results = engine.apply_defaults_all(wp).await;
+    use base64::Engine as _;
+    // Read the chosen default wallpaper on the console and send it as bytes so
+    // students get a real local file (not a teacher-only path).
+    let (data, name) = match req.wallpaper_path.filter(|s| !s.trim().is_empty()) {
+        Some(path) => match tokio::fs::read(&path).await {
+            Ok(b) if !b.is_empty() => (
+                Some(base64::engine::general_purpose::STANDARD.encode(&b)),
+                std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string()),
+            ),
+            _ => (None, None),
+        },
+        None => (None, None),
+    };
+    let results = engine.apply_defaults_all(data, name).await;
     let body: Vec<_> = results
         .into_iter()
         .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))

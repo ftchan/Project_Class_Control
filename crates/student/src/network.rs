@@ -13,7 +13,7 @@ pub fn apply(block: bool) {
     // Private + link-local + multicast + limited broadcast. Covers typical
     // school LANs and our UDP discovery.
     const LAN: &str =
-        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,224.0.0.0/4,255.255.255.255";
+        "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,224.0.0.0/4,255.255.255.255";
     const OUT_RULE: &str = "LabCtl Allow LAN (out)";
     const IN_RULE: &str = "LabCtl Allow LAN (in)";
 

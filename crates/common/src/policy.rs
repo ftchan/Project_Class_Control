@@ -39,10 +39,23 @@ pub struct Policy {
     #[serde(default)]
     pub lock_wallpaper: bool,
 
-    /// Absolute path to the wallpaper to enforce when `lock_wallpaper` is set.
-    /// If `None`, whatever is current at lock time is retained.
+    /// Local path to the wallpaper to enforce when `lock_wallpaper` is set.
+    /// The teacher console fills this in with a path that is valid **on the
+    /// student** (the agent materializes the pushed image and rewrites this to
+    /// a local file), so it never points at a teacher-only path.
     #[serde(default)]
     pub wallpaper_path: Option<String>,
+
+    /// Base64-encoded wallpaper image, transferred so every student has the
+    /// actual file (a teacher-side path would not exist on the student and
+    /// would blank the desktop). The agent writes it to a local file and then
+    /// clears this field before persisting, so `policy.json` stays small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper_data_base64: Option<String>,
+
+    /// Original wallpaper file name (used to keep the correct extension).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallpaper_name: Option<String>,
 
     /// Removable storage handling.
     #[serde(default)]
@@ -97,6 +110,8 @@ impl Default for Policy {
         Self {
             lock_wallpaper: false,
             wallpaper_path: None,
+            wallpaper_data_base64: None,
+            wallpaper_name: None,
             usb_storage: UsbStoragePolicy::Allow,
             uwf_enabled: None,
             uwf_scope: UwfScope::SystemOnly,

@@ -261,14 +261,19 @@ impl Engine {
     }
 
     /// Broadcast the one-click "restore desktop defaults" to every client.
-    pub async fn apply_defaults_all(&self, wallpaper: Option<String>) -> Vec<(Uuid, Result<Report>)> {
+    pub async fn apply_defaults_all(
+        &self,
+        wallpaper_data_base64: Option<String>,
+        wallpaper_name: Option<String>,
+    ) -> Vec<(Uuid, Result<Report>)> {
         let mut out = Vec::new();
         for rec in self.roster().await {
+            let cmd = Command::ApplyDefaults {
+                wallpaper_data_base64: wallpaper_data_base64.clone(),
+                wallpaper_name: wallpaper_name.clone(),
+            };
             let r = match Self::addr_of(&rec) {
-                Ok(addr) => {
-                    self.exchange(addr, Command::ApplyDefaults { wallpaper_path: wallpaper.clone() })
-                        .await
-                }
+                Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(30)).await,
                 Err(e) => Err(e),
             };
             out.push((rec.machine_id, r));

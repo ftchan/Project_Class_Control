@@ -76,6 +76,7 @@ fn main() -> anyhow::Result<()> {
     // no-op so the window still runs for UI work.
     let _tray_guard = start_tray(ui.as_weak());
     let refresh_timer = refresh_timer(ui.as_weak());
+    let policy_timer = policy_watch_timer();
     spawn_control_listener(ui.as_weak());
 
     if show_on_start {
@@ -84,6 +85,7 @@ fn main() -> anyhow::Result<()> {
     slint::run_event_loop()?;
 
     drop(refresh_timer);
+    drop(policy_timer);
     drop(_tray_guard);
     Ok(())
 }
@@ -192,12 +194,6 @@ fn refresh(ui: &MainWindow) {
     let p = store::load_policy();
     apply_policy_display(ui, &p);
 
-    // Re-enforce per-user policy when the teacher pushed a new revision.
-    if LAST_APPLIED_REV.load(Ordering::Relaxed) != p.revision {
-        userpolicy::apply(&p);
-        LAST_APPLIED_REV.store(p.revision, Ordering::Relaxed);
-    }
-
     let back = ui.as_weak();
     std::thread::spawn(move || match ipc::send(Command::QueryStatus) {
         Ok(Report::Status(st)) => {
@@ -233,6 +229,21 @@ fn refresh_timer(ui_w: Weak<MainWindow>) -> Timer {
             if !u.get_locked() {
                 refresh(&u);
             }
+        }
+    });
+    t
+}
+
+/// Enforce per-user policy (wallpaper, Task Manager) whenever the teacher
+/// pushes a new revision — independent of whether the window is open/unlocked,
+/// so policy takes effect while the client sits hidden in the tray.
+fn policy_watch_timer() -> Timer {
+    let t = Timer::default();
+    t.start(TimerMode::Repeated, Duration::from_secs(3), || {
+        let p = store::load_policy();
+        if LAST_APPLIED_REV.load(Ordering::Relaxed) != p.revision {
+            userpolicy::apply(&p);
+            LAST_APPLIED_REV.store(p.revision, Ordering::Relaxed);
         }
     });
     t
