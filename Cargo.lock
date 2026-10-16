@@ -3192,7 +3192,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-common"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3208,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-student"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-teacher"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
