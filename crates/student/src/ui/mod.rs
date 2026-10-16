@@ -149,6 +149,7 @@ fn apply_policy_display(ui: &MainWindow, p: &Policy) {
     ui.set_rev_text(format!("策略 rev {}", p.revision).into());
     // What the teacher asked for; the live state from the agent replaces it.
     ui.set_uwf_on(false);
+    ui.set_uwf_detail("".into());
     ui.set_uwf_text(
         match p.uwf_enabled {
             Some(true) => "已下发开启",
@@ -159,8 +160,12 @@ fn apply_policy_display(ui: &MainWindow, p: &Policy) {
     );
 }
 
-/// Display text for `ClientStatus::uwf_state`, and whether it is protecting.
-fn uwf_label(state: &str) -> (String, bool) {
+/// Display text for `ClientStatus::uwf_state`, whether it is protecting, and
+/// the full error text when it failed.
+fn uwf_label(state: &str) -> (String, bool, String) {
+    if let Some(e) = state.strip_prefix("error:") {
+        return ("出错".into(), false, e.to_string());
+    }
     let text = match state {
         "on" => "已开启（重启即还原）",
         "on_next_boot" => "已设置，重启后生效",
@@ -169,9 +174,9 @@ fn uwf_label(state: &str) -> (String, bool) {
         "installing" => "正在安装 UWF 功能…",
         "install_pending_reboot" => "功能已安装，重启后启用",
         "not_installed" => "未安装",
-        other => return (other.strip_prefix("error:").map_or(other.to_string(), |e| format!("出错：{e}")), false),
+        other => other,
     };
-    (text.to_string(), state == "on")
+    (text.to_string(), state == "on", String::new())
 }
 
 /// Refresh display: local policy immediately, live UWF/host from the agent.
@@ -185,9 +190,10 @@ fn refresh(ui: &MainWindow) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = back.upgrade() {
                     if let Some(state) = st.uwf_state.as_deref() {
-                        let (text, on) = uwf_label(state);
+                        let (text, on, detail) = uwf_label(state);
                         ui.set_uwf_on(on);
                         ui.set_uwf_text(text.into());
+                        ui.set_uwf_detail(detail.into());
                     }
                     if !st.hostname.is_empty() {
                         ui.set_hostname(st.hostname.into());

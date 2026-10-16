@@ -25,6 +25,21 @@ component Pill inherits Rectangle {
     }
 }
 
+// Label and value cells of the status grid; values wrap instead of clipping
+// when the window is narrow.
+component InfoLabel inherits Text {
+    font-size: 12px;
+    color: #71717a;
+    vertical-alignment: top;
+}
+
+component InfoValue inherits Text {
+    font-size: 12px;
+    color: #09090b;
+    wrap: word-wrap;
+    horizontal-stretch: 1;
+}
+
 component Card inherits Rectangle {
     background: #ffffff;
     border-color: #e4e4e7;
@@ -37,8 +52,11 @@ component Card inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "机房学生端";
-    width: 440px;
-    height: 600px;
+    // Resizable: start at the preferred size. The minimum height comes from
+    // the content (wrapped text grows when narrow), so nothing gets clipped.
+    preferred-width: 460px;
+    preferred-height: 620px;
+    min-width: 360px;
     background: #fafafa;
     icon: root.app-icon;
 
@@ -48,6 +66,8 @@ export component MainWindow inherits Window {
     in property <string> hostname: "";
     in property <bool> uwf-on: false;
     in property <string> uwf-text: "未知";
+    // Full UWF error text, if any (the pill only says that it failed).
+    in property <string> uwf-detail: "";
     in property <bool> wallpaper-locked: false;
     in property <string> usb-text: "—";
     in property <string> rev-text: "策略 rev 0";
@@ -83,6 +103,7 @@ export component MainWindow inherits Window {
 
         // ---- Lock gate ----
         if root.locked : Card {
+            vertical-stretch: 0;   // keep its natural height in tall windows
             VerticalLayout {
                 padding: 20px; spacing: 14px;
                 Text {
@@ -121,6 +142,9 @@ export component MainWindow inherits Window {
             }
         }
 
+        // Tall windows: the extra space goes below the lock card.
+        if root.locked : Rectangle { vertical-stretch: 1; }
+
         // ---- Main panel ----
         if !root.locked : VerticalLayout {
             spacing: 16px;
@@ -135,8 +159,16 @@ export component MainWindow inherits Window {
                                horizontal-stretch: 1; }
                         Pill { text: root.uwf-text; fg: root.uwf-on ? #16a34a : #71717a; }
                     }
+                    if root.uwf-detail != "" : Rectangle {
+                        background: #fef2f2; border-radius: 8px;
+                        border-width: 1px; border-color: #fecaca;
+                        HorizontalLayout {
+                            padding: 10px;
+                            Text { text: root.uwf-detail; font-size: 12px; color: #b91c1c; wrap: word-wrap; }
+                        }
+                    }
                     Text {
-                        text: "开启后系统盘的改动会在重启后被丢弃（还原）。";
+                        text: "开启后受保护磁盘的改动会在重启后被丢弃（还原）。";
                         font-size: 12px; color: #71717a; wrap: word-wrap;
                     }
                     Rectangle {
@@ -154,15 +186,13 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     padding: 16px; spacing: 12px;
                     Text { text: "本机状态"; font-size: 14px; font-weight: 600; color: #09090b; }
-                    HorizontalLayout {
-                        spacing: 8px; alignment: start;
-                        Pill { text: "主机：" + root.hostname; }
-                        Pill { text: root.rev-text; }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px; alignment: start;
-                        Pill { text: root.wallpaper-locked ? "壁纸：已锁定" : "壁纸：未锁定"; }
-                        Pill { text: "U盘：" + root.usb-text; }
+                    GridLayout {
+                        spacing-horizontal: 16px;
+                        spacing-vertical: 8px;
+                        Row { InfoLabel { text: "主机"; } InfoValue { text: root.hostname; } }
+                        Row { InfoLabel { text: "策略"; } InfoValue { text: root.rev-text; } }
+                        Row { InfoLabel { text: "壁纸"; } InfoValue { text: root.wallpaper-locked ? "已锁定" : "未锁定"; } }
+                        Row { InfoLabel { text: "U 盘"; } InfoValue { text: root.usb-text; } }
                     }
                 }
             }
