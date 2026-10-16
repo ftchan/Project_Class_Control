@@ -1,0 +1,149 @@
+# LabCtl — 机房课堂终端管理
+
+面向学校机房的局域网课堂管理工具，参考极域电子教室 2016 的管理模式，使用 **Rust** 编写，
+Web 控制台采用 **shadcn 风格**界面。分为 **教师端（控制台）** 与 **学生端（受管客户端）**。
+
+> **适用范围与声明**
+> 本工具仅用于 **学校内网**、由 **机房管理员** 部署与运行；所有受管终端均为 **学校自有设备**，
+> 处于管理员已知的管理范围内。**不用于公网、攻防测试、入侵或任何未授权场景。**
+> 所有功能均采用 Windows 文档化、可逆的机制实现（组策略等效的注册表项、服务控制管理器、
+> WMI、DISM），不使用任何隐藏或对抗性手段：管理员随时可停止/卸载。
+
+---
+
+## 功能
+
+### 学生端（受管客户端） `labctl-student`
+| 功能 | 实现方式 | 说明 |
+|------|----------|------|
+| 锁定桌面壁纸 | 组策略等效注册表项 `NoChangingWallPaper` + 可选强制壁纸 | 可逆，清除即恢复 |
+| U 盘 / 移动存储策略 | `USBSTOR\Start`（允许/禁用）、`StorageDevicePolicies\WriteProtect`（只读） | 仅影响大容量存储，不影响键鼠 |
+| UWF 写入筛选器 开/关 | 读：WMI `root\standardcimv2\embedded` 的 `UWF_Filter`；写：`uwfmgr.exe`；必要时 DISM 安装可选功能 `Client-UnifiedWriteFilter` | **Windows 10 专业版**即可，无需转企业版/教育版，参考 [UWF-Manager](https://github.com/JIRBOY/UWF-Manager) |
+| 客户端访问口令 | Argon2id 口令哈希校验 | 仅客户端下发哈希，防止学生随意改动客户端配置 |
+| 进程保持运行 | 注册为 Windows 服务 + SCM 失败恢复（自动重启） | 常规运维防护，非反查杀；管理员可正常停止/卸载 |
+
+命令：
+```
+labctl-student run         前台运行（开发/调试）
+labctl-student service     作为 Windows 服务运行（由 SCM 调用）
+labctl-student install     注册 Windows 服务（需管理员）
+labctl-student uninstall   卸载 Windows 服务（需管理员）
+labctl-student ui          口令解锁界面
+```
+
+### 教师端（控制台） `labctl-teacher`
+- **课堂屏幕巡览**：以缩略图网格查看本班各教学机当前画面
+- **远程唤起客户端**：向受管终端下发启动客户端界面指令
+- **重启并还原**：下发“重启 + 还原”指令（配合 UWF 覆盖层丢弃 / 还原机制）
+- **下发班级策略**：壁纸锁定、U 盘策略、UWF、访问口令，一键下发到全部终端
+- **可视化状态**：主机名、IP、登录用户、UWF 状态、策略版本、在线/离线
+
+运行后在浏览器打开控制台（默认仅监听 `127.0.0.1:8080`）：
+```
+labctl-teacher
+# 打开 http://127.0.0.1:8080
+```
+
+---
+
+## 架构
+
+```
+crates/common    共享：策略模型、线协议、Argon2 口令、路径、帧编解码
+crates/student   学生端：服务、策略执行(features/)、截屏、口令门、LAN agent
+crates/teacher   教师端：发现/轮询引擎(engine) + axum HTTP/WS API + 内嵌前端
+frontend/dist    shadcn 风格控制台界面（无外部 CDN，可离线运行）
+```
+
+通信：局域网内 TCP（长度前缀 JSON 帧，端口 `47800`）传输指令/状态/缩略图；
+UDP 广播（端口 `47801`）发现终端。控制台对每条指令建立短连接，简单稳健。
+
+---
+
+## 构建
+
+需要 Rust（建议 1.85+）。
+
+```bash
+cargo build --release
+# 产物：
+#   target/release/labctl-student(.exe)
+#   target/release/labctl-teacher(.exe)
+```
+
+### 打包成可运行的 Windows exe（三选一）
+
+> 学生端依赖 Windows 专有库（服务 / WMI / 截屏），**必须在 Windows 目标下编译**，
+> 无法从 macOS/Linux 交叉编译。
+
+1. **在 Windows 本机一键编译+打包**（推荐）
+   先装好 [Rust](https://rustup.rs) 和 VS 的 “Desktop development with C++”(MSVC)，然后：
+   ```powershell
+   .\scripts\build-release.ps1
+   ```
+   产出 `dist\LabCtl\`（含两个 exe、部署脚本、`启动教师端.bat`）和 `dist\LabCtl-<版本>.zip`。
+
+2. **用 GitHub Actions 云端编译**（无需本地 Windows）
+   仓库已带 [.github/workflows/windows-build.yml](.github/workflows/windows-build.yml)。
+   推送代码或在 Actions 页手动触发，完成后在该次运行的 **Artifacts** 下载
+   `LabCtl-windows`（两个 exe + 脚本）；打 Release 时会自动附带 zip。
+
+3. **做成正规安装包 Setup.exe**（会进“程序和功能”）
+   先执行第 1 步生成 exe，再用 [Inno Setup 6+](https://jrsoftware.org/isinfo.php)
+   编译 [installer/LabCtl.iss](installer/LabCtl.iss)，产出 `Output\LabCtl-Setup.exe`，
+   安装时可勾选教师端/学生端（学生端自动注册服务）。
+
+学生端的 Windows 专有功能（服务、注册表、WMI、截屏）仅在 **Windows 目标**编译；
+在其他平台上这些实现为记录日志的空操作，便于在本机开发与测试网络/逻辑部分。
+
+### 前端
+`frontend/dist` 已包含一份可直接使用的离线界面（原生 HTML/CSS/JS，shadcn 风格），
+已内嵌进 `labctl-teacher` 可执行文件。若需二次开发，可在此目录替换为 Vite+React+shadcn 构建产物
+（保持输出目录为 `frontend/dist`），重新 `cargo build` 即可重新内嵌。
+
+---
+
+## 部署（机房管理员）
+
+### A. 单机一键部署（最简单）
+把以下三个文件放到同一个 U 盘/目录：
+`labctl-student.exe`、`scripts\install-student.bat`、`scripts\install-student.ps1`，
+在每台教学机**双击 `install-student.bat`**（会自动弹 UAC 提权）。它会：
+复制程序 → 写入初始策略 → （需要时）安装 UWF 功能 → 注册并启动服务。
+
+机房默认策略在 `install-student.bat` 顶部这行改：
+```bat
+set "POLICY=-LockWallpaper -Usb readonly -Uwf on"
+REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
+```
+
+也可直接用 PowerShell（管理员）精细控制：
+```powershell
+.\scripts\install-student.ps1 -LockWallpaper -Usb readonly -Uwf on -Passphrase "lab-2016"
+```
+参数：`-Usb allow|readonly|deny`、`-Uwf on|off|unmanaged`、`-WallpaperPath <图片>`、
+`-InstallDir <目录>`、`-Passphrase <口令>`。
+
+### B. 整机房批量部署（从教师机推送）
+前提：目标机开启 `admin$` 共享、账号有管理员权限、已装 [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec)。
+把所有教学机的主机名/IP 写进 `pcs.txt`（每行一个），然后：
+```powershell
+.\scripts\deploy-lab.ps1 -HostsFile .\pcs.txt -ExePath .\labctl-student.exe `
+    -PolicyArgs "-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
+```
+> 校内也可改用**组策略（GPO）启动脚本**或 SCCM/Intune 分发 `install-student.ps1`，原理相同。
+
+### C. 卸载
+```powershell
+.\scripts\uninstall-student.ps1          # 停止服务、删除程序与数据
+.\scripts\uninstall-student.ps1 -KeepData # 保留策略/日志
+```
+> 卸载**不会**自动回退壁纸/U盘等注册表策略；如需恢复，先在控制台下发
+> “解锁壁纸 + U盘允许 + UWF不管理”的空策略，再卸载。
+
+### 日常管理
+- 按需在控制台“班级策略”中调整并下发（UWF 变更需学生机重启后生效）。
+- 教师机运行 `labctl-teacher`，浏览器打开控制台进行巡览与管理。
+
+> 生产部署建议：为 TCP/UDP 通信增加共享密钥/ TLS 与来源校验，并将控制台绑定在教师机本机。
+> 本仓库聚焦功能骨架，传输加密留作部署期加固项。

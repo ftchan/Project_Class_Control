@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/student",
+    "crates/teacher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["Lab Admin Tools"]
+
+[workspace.dependencies]
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+tokio = { version = "1.36.0", features = ["full"] }
+anyhow = "1.0.80"
+thiserror = "1.0.57"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+uuid = { version = "1.7.0", features = ["v4", "serde"] }
+bytes = "1.5.0"
+argon2 = "0.5.3"
+rand = "0.8.5"
+directories = "5.0.1"
+chrono = { version = "0.4.34", features = ["serde"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

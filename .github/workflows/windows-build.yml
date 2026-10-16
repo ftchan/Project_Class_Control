@@ -1,0 +1,58 @@
+name: Windows build
+
+# 在 Windows 云端编译教师端 + 学生端为 exe，并作为构建产物上传。
+# 无需本地 Windows：推送代码或在 Actions 页面手动触发即可，完成后到
+# 本次运行的 "Artifacts" 下载 LabCtl-windows.zip。
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+  release:
+    types: [ created ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin labctl-teacher --bin labctl-student
+
+      - name: Stage package
+        shell: pwsh
+        run: |
+          $bin = "target/x86_64-pc-windows-msvc/release"
+          New-Item -ItemType Directory -Force dist/LabCtl/scripts | Out-Null
+          Copy-Item "$bin/labctl-teacher.exe" dist/LabCtl/
+          Copy-Item "$bin/labctl-student.exe" dist/LabCtl/
+          Copy-Item "$bin/labctl-student.exe" dist/LabCtl/scripts/
+          Copy-Item README.md dist/LabCtl/
+          Copy-Item scripts/install-student.ps1   dist/LabCtl/scripts/
+          Copy-Item scripts/install-student.bat   dist/LabCtl/scripts/
+          Copy-Item scripts/uninstall-student.ps1 dist/LabCtl/scripts/
+          Copy-Item scripts/deploy-lab.ps1        dist/LabCtl/scripts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabCtl-windows
+          path: dist/LabCtl
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/LabCtl -DestinationPath LabCtl-windows.zip -Force
+          gh release upload ${{ github.event.release.tag_name }} LabCtl-windows.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

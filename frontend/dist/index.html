@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>机房课堂管理台</title>
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">LC</div>
+      <div>
+        <h1>机房课堂管理台</h1>
+        <p class="muted">本机房 · 局域网 · 仅管理员使用</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="conn" class="badge badge-muted">连接中…</span>
+      <button class="btn btn-outline" id="btn-policy">班级策略</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="toolbar">
+      <div class="stats">
+        <span class="stat"><b id="stat-total">0</b> 台受管终端</span>
+        <span class="stat stat-online"><b id="stat-online">0</b> 在线</span>
+        <span class="stat stat-offline"><b id="stat-offline">0</b> 离线</span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn btn-outline" id="btn-launch-all">唤起客户端</button>
+        <button class="btn btn-danger" id="btn-reboot-all">重启并还原</button>
+      </div>
+    </section>
+
+    <section id="grid" class="grid"></section>
+    <p id="empty" class="empty muted">尚未发现终端。请确认学生端已部署并与本机处于同一局域网。</p>
+  </main>
+</div>
+
+<!-- Policy drawer -->
+<div id="drawer" class="drawer-backdrop" hidden>
+  <div class="drawer">
+    <div class="drawer-head">
+      <h2>班级策略</h2>
+      <button class="icon-btn" id="drawer-close">✕</button>
+    </div>
+    <div class="drawer-body">
+      <label class="switch-row">
+        <span>锁定桌面壁纸<small class="muted">禁止学生自行更换</small></span>
+        <input type="checkbox" id="p-wallpaper" />
+      </label>
+      <label class="field">
+        <span>壁纸路径（可选）</span>
+        <input type="text" id="p-wallpaper-path" placeholder="C:\\LabCtl\\wallpaper.jpg" />
+      </label>
+
+      <label class="field">
+        <span>U 盘 / 移动存储</span>
+        <select id="p-usb">
+          <option value="allow">允许</option>
+          <option value="read_only">只读</option>
+          <option value="deny">禁用挂载</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>UWF 写入筛选器</span>
+        <select id="p-uwf">
+          <option value="unmanaged">不管理</option>
+          <option value="true">开启（下次重启生效）</option>
+          <option value="false">关闭（下次重启生效）</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>客户端访问口令<small class="muted">留空表示不设置</small></span>
+        <input type="password" id="p-pass" placeholder="输入口令" />
+      </label>
+
+      <div class="drawer-note muted">
+        策略通过局域网下发到选中/全部终端；UWF 变更需在学生机重启后生效。
+      </div>
+    </div>
+    <div class="drawer-foot">
+      <button class="btn btn-outline" id="drawer-cancel">取消</button>
+      <button class="btn btn-primary" id="drawer-apply">下发到全部终端</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
