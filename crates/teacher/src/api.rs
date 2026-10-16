@@ -22,6 +22,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route("/api/roster", get(roster))
         .route("/api/hash", post(hash))
+        .route("/api/pick-wallpaper", post(pick_wallpaper))
         .route("/api/policy", post(policy_all))
         .route("/api/clients/:id/policy", post(policy_one))
         .route("/api/clients/:id/launch", post(launch))
@@ -45,6 +46,23 @@ async fn hash(Json(req): Json<HashReq>) -> impl IntoResponse {
         Ok(h) => Json(json!({ "hash": h })).into_response(),
         Err(e) => error(&e.to_string()),
     }
+}
+
+/// Open a native file-picker on the console machine and return the chosen
+/// wallpaper path. The browser cannot read local absolute paths, so the
+/// dialog is driven server-side (the console runs on the teacher's own PC).
+async fn pick_wallpaper() -> impl IntoResponse {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .add_filter("图片", &["jpg", "jpeg", "png", "bmp"])
+            .set_title("选择壁纸")
+            .pick_file()
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten();
+    Json(json!({ "path": path })).into_response()
 }
 
 async fn policy_all(

@@ -1,0 +1,188 @@
+import { Button, LineEdit, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+// Light, shadcn-ish card look built from primitives so it matches the
+// teacher console's light theme.
+component Card inherits Rectangle {
+    background: #ffffff;
+    border-color: #e4e4e7;
+    border-width: 1px;
+    border-radius: 12px;
+    drop-shadow-blur: 8px;
+    drop-shadow-color: #0000000f;
+    drop-shadow-offset-y: 2px;
+}
+
+component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> fg: #3f3f46;
+    height: 24px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: #e4e4e7;
+    background: #f4f4f5;
+    HorizontalBox {
+        padding-left: 10px; padding-right: 10px;
+        Text { text: root.text; color: root.fg; font-size: 12px; vertical-alignment: center; }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "机房学生端";
+    width: 460px;
+    height: 560px;
+    background: #fafafa;
+
+    // ---- state set from Rust ----
+    in property <bool> locked: true;
+    in property <bool> first-run: false;
+    in property <string> hostname: "";
+    in property <bool> uwf-on: false;
+    in property <string> uwf-text: "未知";
+    in property <bool> wallpaper-locked: false;
+    in property <string> usb-text: "—";
+    in property <string> rev-text: "策略 rev 0";
+    in property <bool> busy: false;
+    in-out property <string> message: "";
+
+    // ---- callbacks to Rust ----
+    callback unlock(string);
+    callback toggle-uwf(bool);
+    callback request-exit();
+    callback hide-window();
+
+    // cleared from Rust on re-lock so a cached password can't be reused.
+    in-out property <string> pw;
+    in-out property <string> pw2;
+
+    VerticalBox {
+        padding: 20px;
+        spacing: 16px;
+
+        // Header
+        HorizontalBox {
+            spacing: 12px;
+            Rectangle {
+                width: 40px; height: 40px; border-radius: 10px; background: #18181b;
+                Text { text: "LC"; color: white; font-weight: 700; font-size: 15px;
+                       horizontal-alignment: center; vertical-alignment: center; }
+            }
+            VerticalBox {
+                spacing: 2px; alignment: center;
+                Text { text: "机房学生端"; font-size: 16px; font-weight: 700; color: #09090b; }
+                Text { text: "受教师端统一管理 · 本机房内网"; font-size: 12px; color: #71717a; }
+            }
+        }
+
+        // ---------- LOCK GATE ----------
+        if root.locked : Card {
+            VerticalBox {
+                padding: 20px; spacing: 14px;
+                Text {
+                    text: root.first-run ? "首次使用，请设置访问密码" : "请输入访问密码";
+                    font-size: 15px; font-weight: 600; color: #09090b;
+                }
+                Text {
+                    text: root.first-run ? "设置后，每次打开本程序都需要输入该密码。"
+                                         : "输入密码后方可查看与操作。";
+                    font-size: 12px; color: #71717a; wrap: word-wrap;
+                }
+                LineEdit {
+                    placeholder-text: "访问密码";
+                    input-type: password;
+                    text <=> root.pw;
+                    accepted => { root.try-submit(); }
+                }
+                if root.first-run : LineEdit {
+                    placeholder-text: "再次输入确认";
+                    input-type: password;
+                    text <=> root.pw2;
+                    accepted => { root.try-submit(); }
+                }
+                if root.message != "" : Text {
+                    text: root.message; color: #dc2626; font-size: 12px;
+                }
+                Button {
+                    text: root.first-run ? "设置并进入" : "解锁";
+                    primary: true;
+                    enabled: !root.busy;
+                    clicked => { root.try-submit(); }
+                }
+            }
+        }
+
+        // ---------- MAIN PANEL ----------
+        if !root.locked : VerticalBox {
+            spacing: 16px;
+
+            Card {
+                VerticalBox {
+                    padding: 16px; spacing: 12px;
+                    HorizontalBox {
+                        Text { text: "UWF 写入筛选器"; font-size: 14px; font-weight: 600;
+                               color: #09090b; vertical-alignment: center; }
+                        Rectangle { } // spacer
+                        Pill {
+                            text: root.uwf-text;
+                            fg: root.uwf-on ? #16a34a : #71717a;
+                        }
+                    }
+                    Text {
+                        text: "开启后，系统盘的改动会在重启后被丢弃（还原）。切换需重启生效。";
+                        font-size: 12px; color: #71717a; wrap: word-wrap;
+                    }
+                    HorizontalBox {
+                        spacing: 10px;
+                        Button {
+                            text: "开启 UWF"; enabled: !root.busy && !root.uwf-on;
+                            clicked => { root.toggle-uwf(true); }
+                        }
+                        Button {
+                            text: "关闭 UWF"; enabled: !root.busy && root.uwf-on;
+                            clicked => { root.toggle-uwf(false); }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                VerticalBox {
+                    padding: 16px; spacing: 10px;
+                    Text { text: "本机状态"; font-size: 14px; font-weight: 600; color: #09090b; }
+                    HorizontalBox {
+                        spacing: 8px; alignment: start;
+                        Pill { text: "主机：" + root.hostname; }
+                        Pill { text: root.rev-text; }
+                    }
+                    HorizontalBox {
+                        spacing: 8px; alignment: start;
+                        Pill { text: root.wallpaper-locked ? "壁纸：已锁定" : "壁纸：未锁定"; }
+                        Pill { text: "U盘：" + root.usb-text; }
+                    }
+                }
+            }
+
+            if root.message != "" : Text { text: root.message; color: #2563eb; font-size: 12px; }
+
+            Rectangle { } // vertical spacer
+
+            HorizontalBox {
+                spacing: 10px;
+                Button { text: "隐藏到托盘"; clicked => { root.hide-window(); } }
+                Button { text: "退出程序"; clicked => { root.request-exit(); } }
+            }
+        }
+    }
+
+    // Shared submit for the lock gate.
+    callback try-submit();
+    try-submit => {
+        if (root.first-run && root.pw != root.pw2) {
+            root.message = "两次输入不一致";
+        } else if (root.pw == "") {
+            root.message = "请输入密码";
+        } else {
+            root.message = "";
+            root.unlock(root.pw);
+        }
+    }
+}

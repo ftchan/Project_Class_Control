@@ -39,21 +39,35 @@ Name: "teacher"; Description: "教师端控制台 labctl-teacher"; Types: teache
 Name: "student"; Description: "学生端受管客户端 labctl-student（注册为服务）"; Types: student custom
 
 [Files]
-Source: "{#BinDir}\labctl-teacher.exe"; DestDir: "{app}"; Components: teacher; Flags: ignoreversion
-Source: "{#BinDir}\labctl-student.exe"; DestDir: "{app}"; Components: student; Flags: ignoreversion
-Source: "..\README.md";                 DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\labctl-teacher.exe";    DestDir: "{app}"; Components: teacher; Flags: ignoreversion
+Source: "{#BinDir}\labctl-student.exe";    DestDir: "{app}"; Components: student; Flags: ignoreversion
+Source: "{#BinDir}\labctl-student-ui.exe"; DestDir: "{app}"; Components: student; Flags: ignoreversion
+Source: "..\README.md";                    DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\教师端控制台"; Filename: "{app}\labctl-teacher.exe"; Components: teacher
+Name: "{group}\学生端客户端"; Filename: "{app}\labctl-student-ui.exe"; Components: student
 Name: "{group}\卸载 LabCtl"; Filename: "{uninstallexe}"
+
+[Registry]
+; 学生端 GUI 开机自启（本机所有用户）。
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+  ValueType: string; ValueName: "LabCtlStudentUI"; \
+  ValueData: """{app}\labctl-student-ui.exe"""; \
+  Components: student; Flags: uninsdeletevalue
 
 [Run]
 ; 安装学生端：注册并启动服务（install 子命令内部完成 SCM 注册与失败恢复设置）。
 Filename: "{app}\labctl-student.exe"; Parameters: "install"; Components: student; \
   Flags: runhidden waituntilterminated; StatusMsg: "正在注册学生端服务..."
+; 立即启动 GUI 客户端。
+Filename: "{app}\labctl-student-ui.exe"; Components: student; \
+  Flags: nowait postinstall skipifsilent; Description: "启动学生端客户端"
 
 [UninstallRun]
-; 卸载前先移除服务。
+; 卸载前先结束 GUI 客户端并移除服务。
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /im labctl-student-ui.exe"; \
+  Components: student; Flags: runhidden; RunOnceId: "StopLabCtlUi"
 Filename: "{app}\labctl-student.exe"; Parameters: "uninstall"; Components: student; \
   Flags: runhidden waituntilterminated; RunOnceId: "RemoveLabCtlService"
 

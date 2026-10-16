@@ -136,6 +136,13 @@ $("drawer-close").onclick = closeDrawer;
 $("drawer-cancel").onclick = closeDrawer;
 drawer.onclick = (e) => { if (e.target === drawer) closeDrawer(); };
 
+$("p-wallpaper-pick").onclick = async () => {
+  try {
+    const { path } = await api.post("/api/pick-wallpaper");
+    if (path) $("p-wallpaper-path").value = path;
+  } catch { toast("无法打开文件选择框"); }
+};
+
 $("drawer-apply").onclick = async () => {
   const uwfSel = $("p-uwf").value;
   const policy = {

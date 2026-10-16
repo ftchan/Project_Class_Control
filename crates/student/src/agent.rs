@@ -182,11 +182,23 @@ fn hostname() -> String {
 }
 
 fn launch_ui() -> Result<()> {
-    // Launch our own gate/foreground UI. On a service deployment this would
-    // start the UI in the active interactive session; here we spawn the
-    // same binary in `ui` mode.
-    let exe = std::env::current_exe()?;
-    std::process::Command::new(exe).arg("ui").spawn()?;
+    // Start the GUI client (labctl-student-ui) if it isn't already running.
+    // It lives next to this agent executable. A second launch simply signals
+    // the existing tray instance to show itself, so this is idempotent.
+    //
+    // Note: when the agent runs as a session-0 service, a plain spawn won't
+    // surface in the interactive desktop; the GUI's logon autostart is the
+    // primary path, and this is a best-effort nudge.
+    let dir = std::env::current_exe()?
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let ui_exe = dir.join(if cfg!(windows) {
+        "labctl-student-ui.exe"
+    } else {
+        "labctl-student-ui"
+    });
+    std::process::Command::new(ui_exe).spawn()?;
     Ok(())
 }
 

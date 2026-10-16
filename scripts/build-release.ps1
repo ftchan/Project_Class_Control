@@ -24,13 +24,14 @@ $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
   Write-Host "== 编译 (release, $Target) ==" -ForegroundColor Cyan
-  cargo build --release --target $Target --bin labctl-teacher --bin labctl-student
+  cargo build --release --target $Target --bin labctl-teacher --bin labctl-student --bin labctl-student-ui
   if ($LASTEXITCODE -ne 0) { throw "cargo build 失败" }
 
   $bin = Join-Path $root "target\$Target\release"
   $teacher = Join-Path $bin "labctl-teacher.exe"
   $student = Join-Path $bin "labctl-student.exe"
-  foreach ($f in @($teacher, $student)) {
+  $studentUi = Join-Path $bin "labctl-student-ui.exe"
+  foreach ($f in @($teacher, $student, $studentUi)) {
     if (-not (Test-Path $f)) { throw "缺少产物：$f" }
   }
 
@@ -45,13 +46,15 @@ try {
 
   Copy-Item $teacher $out -Force
   Copy-Item $student $out -Force
+  Copy-Item $studentUi $out -Force
   Copy-Item (Join-Path $root "README.md") $out -Force
   Copy-Item (Join-Path $PSScriptRoot "install-student.ps1")   (Join-Path $out "scripts") -Force
   Copy-Item (Join-Path $PSScriptRoot "install-student.bat")   (Join-Path $out "scripts") -Force
   Copy-Item (Join-Path $PSScriptRoot "uninstall-student.ps1") (Join-Path $out "scripts") -Force
   Copy-Item (Join-Path $PSScriptRoot "deploy-lab.ps1")        (Join-Path $out "scripts") -Force
-  # 把学生端 exe 也放一份到 scripts 旁，方便“双击 bat 一键部署”。
+  # 把学生端 exe（含 GUI）也放一份到 scripts 旁，方便“双击 bat 一键部署”。
   Copy-Item $student (Join-Path $out "scripts") -Force
+  Copy-Item $studentUi (Join-Path $out "scripts") -Force
 
   # 教师端快捷启动器
   @"

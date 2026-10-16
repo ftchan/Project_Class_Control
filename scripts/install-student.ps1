@@ -72,6 +72,20 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $targetExe = Join-Path $InstallDir "labctl-student.exe"
 Copy-Item -Path $ExePath -Destination $targetExe -Force
 
+# GUI 客户端（可视化托盘程序）——若与学生端 exe 同目录则一并安装并设开机自启。
+$uiSrc = Join-Path (Split-Path $ExePath -Parent) "labctl-student-ui.exe"
+$uiExe = Join-Path $InstallDir "labctl-student-ui.exe"
+if (Test-Path $uiSrc) {
+  Copy-Item -Path $uiSrc -Destination $uiExe -Force
+  # 开机自启（HKLM Run：对本机所有登录用户生效）
+  $runKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+  New-Item -Path $runKey -Force | Out-Null
+  Set-ItemProperty -Path $runKey -Name "LabCtlStudentUI" -Value "`"$uiExe`""
+  Write-Host "      已安装 GUI 客户端并设为开机自启。"
+} else {
+  Write-Host "      （未找到 labctl-student-ui.exe，跳过 GUI 客户端安装）" -ForegroundColor DarkGray
+}
+
 # --- 2. 写入初始策略 ---
 Write-Host "[2/4] 写入初始策略 ..." -ForegroundColor Cyan
 $dataDir = Join-Path $env:ProgramData "LabCtl"
@@ -121,9 +135,15 @@ Write-Host "[4/4] 注册并启动 Windows 服务 ..." -ForegroundColor Cyan
 & $targetExe install
 if ($LASTEXITCODE -ne 0) { throw "服务安装失败（exit $LASTEXITCODE）。" }
 
+# 启动 GUI 客户端（best-effort；下次登录会自动启动）
+if (Test-Path $uiExe) {
+  Start-Process -FilePath $uiExe -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 Write-Host "✔ 部署完成。" -ForegroundColor Green
 Write-Host "  可执行文件 : $targetExe"
+if (Test-Path $uiExe) { Write-Host "  GUI 客户端 : $uiExe（托盘常驻，开机自启）" }
 Write-Host "  策略文件   : $policyPath"
 Write-Host "  服务名     : LabCtlStudent（services.msc 可见，可正常停止/卸载）"
 if ($Uwf -eq "on") { Write-Host "  提示       : UWF 需重启后生效。" -ForegroundColor Yellow }

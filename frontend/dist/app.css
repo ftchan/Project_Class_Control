@@ -1,19 +1,19 @@
 /* shadcn-inspired theme: neutral/zinc palette, soft borders, subtle shadows.
    Self-contained — no external fonts or CDNs, so it works on an offline LAN. */
 :root {
-  --bg: #09090b;
-  --card: #111113;
-  --card-2: #18181b;
-  --border: #27272a;
-  --fg: #fafafa;
-  --muted: #a1a1aa;
-  --primary: #fafafa;
-  --primary-fg: #18181b;
-  --danger: #ef4444;
-  --ring: #52525b;
+  --bg: #fafafa;
+  --card: #ffffff;
+  --card-2: #f4f4f5;
+  --border: #e4e4e7;
+  --fg: #09090b;
+  --muted: #71717a;
+  --primary: #18181b;
+  --primary-fg: #fafafa;
+  --danger: #dc2626;
+  --ring: #a1a1aa;
   --radius: 12px;
-  --green: #22c55e;
-  --red: #f87171;
+  --green: #16a34a;
+  --red: #dc2626;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -28,7 +28,7 @@ small.muted { display: block; font-size: 11px; font-weight: 400; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 24px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: rgba(9,9,11,.85); backdrop-filter: blur(8px); z-index: 5;
+  position: sticky; top: 0; background: rgba(255,255,255,.8); backdrop-filter: blur(8px); z-index: 5;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .logo {
@@ -84,7 +84,7 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 }
 .btn:active { transform: translateY(1px); }
 .btn-primary { background: var(--primary); color: var(--primary-fg); font-weight: 600; }
-.btn-primary:hover { background: #e4e4e7; }
+.btn-primary:hover { background: #27272a; }
 .btn-outline { background: transparent; color: var(--fg); border-color: var(--border); }
 .btn-outline:hover { background: var(--card-2); }
 .btn-danger { background: transparent; color: var(--danger); border-color: rgba(239,68,68,.4); }
@@ -123,6 +123,9 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
   color: var(--fg); padding: 8px 10px; font: inherit;
 }
 .field input:focus, .field select:focus { outline: 2px solid var(--ring); outline-offset: 0; }
+.input-row { display: flex; gap: 8px; }
+.input-row input { flex: 1; }
+.input-row .btn { white-space: nowrap; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .switch-row input { width: 18px; height: 18px; accent-color: var(--green); }
 

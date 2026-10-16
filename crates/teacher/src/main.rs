@@ -29,12 +29,31 @@ async fn main() -> Result<()> {
     tracing::info!(%bind, "console UI at http://{bind}");
     println!("Lab console running. Open http://{bind} in your browser.");
 
+    // Auto-open the console in the default browser (unless disabled).
+    if std::env::var("LABCTL_NO_BROWSER").is_err() {
+        open_in_browser(&format!("http://{bind}"));
+    }
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await?;
     Ok(())
+}
+
+/// Best-effort: open `url` in the operator's default browser.
+fn open_in_browser(url: &str) {
+    let result = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = result {
+        tracing::debug!(error = %e, "could not auto-open browser");
+    }
 }
 
 fn init_tracing() {

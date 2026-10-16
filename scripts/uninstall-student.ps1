@@ -29,6 +29,11 @@ if (Test-Path $exe) {
   sc.exe delete LabCtlStudent 2>$null | Out-Null
 }
 
+# 结束 GUI 客户端并移除自启项
+Stop-Process -Name "labctl-student-ui" -Force -ErrorAction SilentlyContinue
+Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" `
+  -Name "LabCtlStudentUI" -ErrorAction SilentlyContinue
+
 Write-Host "删除安装目录 ..." -ForegroundColor Cyan
 Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
 

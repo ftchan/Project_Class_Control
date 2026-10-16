@@ -28,7 +28,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binaries
-        run: cargo build --release --target x86_64-pc-windows-msvc --bin labctl-teacher --bin labctl-student
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin labctl-teacher --bin labctl-student --bin labctl-student-ui
 
       - name: Stage package
         shell: pwsh
@@ -37,7 +37,9 @@ jobs:
           New-Item -ItemType Directory -Force dist/LabCtl/scripts | Out-Null
           Copy-Item "$bin/labctl-teacher.exe" dist/LabCtl/
           Copy-Item "$bin/labctl-student.exe" dist/LabCtl/
+          Copy-Item "$bin/labctl-student-ui.exe" dist/LabCtl/
           Copy-Item "$bin/labctl-student.exe" dist/LabCtl/scripts/
+          Copy-Item "$bin/labctl-student-ui.exe" dist/LabCtl/scripts/
           Copy-Item README.md dist/LabCtl/
           Copy-Item scripts/install-student.ps1   dist/LabCtl/scripts/
           Copy-Item scripts/install-student.bat   dist/LabCtl/scripts/

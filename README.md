@@ -21,6 +21,7 @@ Web 控制台采用 **shadcn 风格**界面。分为 **教师端（控制台）*
 | UWF 写入筛选器 开/关 | 读：WMI `root\standardcimv2\embedded` 的 `UWF_Filter`；写：`uwfmgr.exe`；必要时 DISM 安装可选功能 `Client-UnifiedWriteFilter` | **Windows 10 专业版**即可，无需转企业版/教育版，参考 [UWF-Manager](https://github.com/JIRBOY/UWF-Manager) |
 | 客户端访问口令 | Argon2id 口令哈希校验 | 仅客户端下发哈希，防止学生随意改动客户端配置 |
 | 进程保持运行 | 注册为 Windows 服务 + SCM 失败恢复（自动重启） | 常规运维防护，非反查杀；管理员可正常停止/卸载 |
+| 可视化 GUI 客户端 | `labctl-student-ui`（slint，亮色 shadcn 风格）| 托盘常驻；可本机开关 UWF；受教师端策略控制；**首次运行设密码**，之后每次打开/退出都需密码；关闭窗口仅最小化到托盘；**开机自启** |
 
 命令：
 ```
@@ -49,9 +50,10 @@ labctl-teacher
 ## 架构
 
 ```
-crates/common    共享：策略模型、线协议、Argon2 口令、路径、帧编解码
-crates/student   学生端：服务、策略执行(features/)、截屏、口令门、LAN agent
-crates/teacher   教师端：发现/轮询引擎(engine) + axum HTTP/WS API + 内嵌前端
+crates/common     共享：策略模型、线协议、Argon2 口令、路径、帧编解码
+crates/student    学生端服务：策略执行(features/)、截屏、LAN agent
+crates/student-ui 学生端 GUI 客户端：slint 界面、托盘、密码门、UWF 开关、开机自启
+crates/teacher    教师端：发现/轮询引擎(engine) + axum HTTP/WS API + 内嵌前端
 frontend/dist    shadcn 风格控制台界面（无外部 CDN，可离线运行）
 ```
 
