@@ -23,6 +23,7 @@
     </div>
   </header>
 
+  <div class="layout">
   <main>
     <section class="toolbar">
       <div class="stats">
@@ -41,16 +42,18 @@
     <section id="grid" class="grid"></section>
     <p id="empty" class="empty muted">尚未发现终端。请确认学生端已部署并与本机处于同一局域网。</p>
   </main>
-</div>
 
-<!-- Policy drawer -->
-<div id="drawer" class="drawer-backdrop" hidden>
-  <div class="drawer">
-    <div class="drawer-head">
-      <h2>班级策略</h2>
-      <button class="icon-btn" id="drawer-close">✕</button>
-    </div>
-    <div class="drawer-body">
+  <!-- Class policy: docked on the right, collapsible -->
+  <aside id="policy-panel" class="policy-panel" aria-label="班级策略">
+    <button class="panel-tab" id="panel-expand" title="展开班级策略">
+      <span class="panel-tab-icon">«</span><span class="panel-tab-text">班级策略</span>
+    </button>
+    <div class="panel-inner">
+      <div class="drawer-head">
+        <h2>班级策略</h2>
+        <button class="icon-btn" id="panel-collapse" title="收起">»</button>
+      </div>
+      <div class="drawer-body">
       <label class="switch-row">
         <span>锁定桌面壁纸<small class="muted">禁止学生自行更换</small></span>
         <input type="checkbox" id="p-wallpaper" />
@@ -101,7 +104,7 @@
 
       <label class="field">
         <span>客户端访问口令<small class="muted">统一设置/修改全部学生端口令；留空＝不改动</small></span>
-        <input type="password" id="p-pass" placeholder="输入新口令" />
+        <input type="password" id="p-pass" placeholder="输入新口令" autocomplete="new-password" />
       </label>
 
       <div class="drawer-note muted">
@@ -111,11 +114,12 @@
         （终端卡片上的 UWF 标签会显示进度）；之后<b>每次重启都会还原</b>所选磁盘。<br />
         测试方法：卡片显示"UWF:已开启"后新建文件→重启，文件应消失。
       </div>
+      </div>
+      <div class="drawer-foot">
+        <button class="btn btn-primary" id="drawer-apply">下发到全部终端</button>
+      </div>
     </div>
-    <div class="drawer-foot">
-      <button class="btn btn-outline" id="drawer-cancel">取消</button>
-      <button class="btn btn-primary" id="drawer-apply">下发到全部终端</button>
-    </div>
+  </aside>
   </div>
 </div>
 

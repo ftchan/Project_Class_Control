@@ -210,16 +210,21 @@ $("btn-reboot-all").onclick = (e) => {
     summarize("重启还原", await forAll("reboot", { restore: true, delay_secs: 5 })));
 };
 
-// --- Policy drawer ---
-const drawer = $("drawer");
-const openDrawer = () => (drawer.hidden = false);
-const closeDrawer = () => (drawer.hidden = true);
-$("btn-policy").onclick = openDrawer;
-$("drawer-close").onclick = closeDrawer;
-$("drawer-cancel").onclick = closeDrawer;
-drawer.onclick = (e) => { if (e.target === drawer) closeDrawer(); };
+// --- Class policy panel (docked on the right, collapsible) ---
+const panel = $("policy-panel");
+function setPanelCollapsed(collapsed) {
+  panel.classList.toggle("collapsed", collapsed);
+  $("btn-policy").classList.toggle("is-active", !collapsed);
+  try { localStorage.setItem("policyPanelCollapsed", collapsed ? "1" : "0"); } catch {}
+}
+let startCollapsed = false;
+try { startCollapsed = localStorage.getItem("policyPanelCollapsed") === "1"; } catch {}
+setPanelCollapsed(startCollapsed);
+$("btn-policy").onclick = () => setPanelCollapsed(!panel.classList.contains("collapsed"));
+$("panel-collapse").onclick = () => setPanelCollapsed(true);
+$("panel-expand").onclick = () => setPanelCollapsed(false);
 
-// --- Drawer settings persistence (survive console restart) ---
+// --- Policy settings persistence (survive console restart) ---
 function collectSettings() {
   return {
     lock_wallpaper: $("p-wallpaper").checked,
@@ -321,11 +326,12 @@ $("drawer-apply").onclick = (e) => busy(e.currentTarget, "下发中…", async (
     policy.config_passphrase_hash = hash;
   }
 
-  // Persist the drawer choices (not the plaintext password) for next time.
+  // Persist the panel choices (not the plaintext password) for next time.
   api.post("/api/settings", collectSettings()).catch(() => {});
 
   const res = await api.post("/api/policy", policy);
-  closeDrawer();
+  // The passphrase is sent once; an empty field means "keep it" next time.
+  if (pass && (res.results || []).some((r) => r.ok)) $("p-pass").value = "";
   summarize("策略下发", res);
 });
 
