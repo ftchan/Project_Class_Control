@@ -13,7 +13,7 @@ use labctl_common::protocol::{
 };
 use labctl_common::{DISCOVERY_MAGIC, DISCOVERY_PORT};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
@@ -87,26 +87,55 @@ impl Engine {
         }
     }
 
-    /// Broadcast a discovery beacon and absorb replies for a short window.
+    /// Broadcast a discovery beacon on every IPv4 adapter and absorb replies
+    /// for a short window.
+    ///
+    /// A single send to 255.255.255.255 from an unbound socket leaves Windows
+    /// on one adapter only (the lowest-metric broadcast route), which is often
+    /// a Hyper-V/WSL or VMware virtual NIC, so clients on the real Wi-Fi/LAN
+    /// never hear it. Instead, bind one socket per adapter address and send
+    /// both the subnet broadcast and the limited broadcast from it.
     async fn discover(&self) -> Result<()> {
-        let sock = UdpSocket::bind(("0.0.0.0", 0)).await?;
-        sock.set_broadcast(true)?;
-        sock.send_to(
-            DISCOVERY_MAGIC.as_bytes(),
-            (std::net::Ipv4Addr::BROADCAST, DISCOVERY_PORT),
-        )
-        .await?;
-
-        let mut buf = [0u8; 256];
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                break;
+        let mut socks = Vec::new();
+        for (local, subnet_bcast) in broadcast_targets() {
+            let Ok(sock) = UdpSocket::bind((local, 0)).await else { continue };
+            if sock.set_broadcast(true).is_err() {
+                continue;
             }
-            match tokio::time::timeout(remaining, sock.recv_from(&mut buf)).await {
-                Ok(Ok((n, from))) => self.ingest_beacon(&buf[..n], from.ip()).await,
-                _ => break,
+            for dst in [subnet_bcast, Ipv4Addr::BROADCAST] {
+                if let Err(e) = sock.send_to(DISCOVERY_MAGIC.as_bytes(), (dst, DISCOVERY_PORT)).await {
+                    tracing::debug!(%local, %dst, error = %e, "beacon send failed");
+                }
+            }
+            socks.push(sock);
+        }
+        if socks.is_empty() {
+            // Adapter enumeration failed: fall back to the default route.
+            let sock = UdpSocket::bind(("0.0.0.0", 0)).await?;
+            sock.set_broadcast(true)?;
+            sock.send_to(DISCOVERY_MAGIC.as_bytes(), (Ipv4Addr::BROADCAST, DISCOVERY_PORT))
+                .await?;
+            socks.push(sock);
+        }
+
+        // Collect replies from every socket until the shared deadline.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(800);
+        let mut readers = tokio::task::JoinSet::new();
+        for sock in socks {
+            readers.spawn(async move {
+                let mut replies = Vec::new();
+                let mut buf = [0u8; 256];
+                while let Ok(Ok((n, from))) =
+                    tokio::time::timeout_at(deadline, sock.recv_from(&mut buf)).await
+                {
+                    replies.push((buf[..n].to_vec(), from.ip()));
+                }
+                replies
+            });
+        }
+        while let Some(res) = readers.join_next().await {
+            for (data, ip) in res.unwrap_or_default() {
+                self.ingest_beacon(&data, ip).await;
             }
         }
         Ok(())
@@ -279,5 +308,42 @@ impl Engine {
             out.push((rec.machine_id, r));
         }
         out
+    }
+}
+
+/// Every non-loopback IPv4 adapter address paired with its subnet broadcast.
+fn broadcast_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
+    let ifaces = match if_addrs::get_if_addrs() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "could not list network adapters");
+            return Vec::new();
+        }
+    };
+    ifaces
+        .into_iter()
+        .filter_map(|iface| match iface.addr {
+            if_addrs::IfAddr::V4(v4) if !v4.ip.is_loopback() => {
+                Some((v4.ip, subnet_broadcast(v4.ip, v4.netmask)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn subnet_broadcast(ip: Ipv4Addr, netmask: Ipv4Addr) -> Ipv4Addr {
+    Ipv4Addr::from(u32::from(ip) | !u32::from(netmask))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subnet_broadcast_per_prefix() {
+        let ip = Ipv4Addr::new(192, 168, 31, 123);
+        assert_eq!(subnet_broadcast(ip, Ipv4Addr::new(255, 255, 255, 0)), Ipv4Addr::new(192, 168, 31, 255));
+        let ip = Ipv4Addr::new(172, 25, 208, 1);
+        assert_eq!(subnet_broadcast(ip, Ipv4Addr::new(255, 255, 240, 0)), Ipv4Addr::new(172, 25, 223, 255));
     }
 }
