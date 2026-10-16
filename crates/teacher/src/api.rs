@@ -23,6 +23,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/roster", get(roster))
         .route("/api/hash", post(hash))
         .route("/api/pick-wallpaper", post(pick_wallpaper))
+        .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/policy", post(policy_all))
         .route("/api/clients/:id/policy", post(policy_one))
         .route("/api/clients/:id/launch", post(launch))
@@ -46,6 +47,29 @@ async fn hash(Json(req): Json<HashReq>) -> impl IntoResponse {
         Ok(h) => Json(json!({ "hash": h })).into_response(),
         Err(e) => error(&e.to_string()),
     }
+}
+
+/// Persisted console drawer settings so the operator's last choices survive a
+/// restart. Stored as an opaque JSON blob next to the console's data.
+fn settings_path() -> std::path::PathBuf {
+    labctl_common::paths::data_dir().join("console-settings.json")
+}
+
+async fn get_settings() -> impl IntoResponse {
+    let v: serde_json::Value = std::fs::read(settings_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| json!({}));
+    Json(v).into_response()
+}
+
+async fn save_settings(Json(v): Json<serde_json::Value>) -> impl IntoResponse {
+    let path = settings_path();
+    if let Some(p) = path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let _ = std::fs::write(&path, serde_json::to_vec_pretty(&v).unwrap_or_default());
+    Json(json!({ "ok": true })).into_response()
 }
 
 /// Open a native file-picker on the console machine and return the chosen

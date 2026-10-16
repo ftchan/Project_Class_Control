@@ -136,6 +136,30 @@ $("drawer-close").onclick = closeDrawer;
 $("drawer-cancel").onclick = closeDrawer;
 drawer.onclick = (e) => { if (e.target === drawer) closeDrawer(); };
 
+// --- Drawer settings persistence (survive console restart) ---
+function collectSettings() {
+  return {
+    lock_wallpaper: $("p-wallpaper").checked,
+    wallpaper_path: $("p-wallpaper-path").value,
+    usb_storage: $("p-usb").value,
+    uwf: $("p-uwf").value,
+    uwf_scope: $("p-uwf-scope").value,
+    disable_task_manager: $("p-taskmgr").checked,
+  };
+}
+
+function applySettings(s) {
+  if (!s || typeof s !== "object") return;
+  if (typeof s.lock_wallpaper === "boolean") $("p-wallpaper").checked = s.lock_wallpaper;
+  if (typeof s.wallpaper_path === "string") $("p-wallpaper-path").value = s.wallpaper_path;
+  if (s.usb_storage) $("p-usb").value = s.usb_storage;
+  if (s.uwf) $("p-uwf").value = s.uwf;
+  if (s.uwf_scope) $("p-uwf-scope").value = s.uwf_scope;
+  if (typeof s.disable_task_manager === "boolean") $("p-taskmgr").checked = s.disable_task_manager;
+}
+
+api.get("/api/settings").then(applySettings).catch(() => {});
+
 $("p-wallpaper-pick").onclick = async () => {
   try {
     const { path } = await api.post("/api/pick-wallpaper");
@@ -161,6 +185,9 @@ $("drawer-apply").onclick = async () => {
     const { hash } = await api.post("/api/hash", { passphrase: pass });
     policy.config_passphrase_hash = hash;
   }
+
+  // Persist the drawer choices (not the plaintext password) for next time.
+  api.post("/api/settings", collectSettings()).catch(() => {});
 
   const res = await api.post("/api/policy", policy);
   const ok = (res.results || []).filter((r) => r.ok).length;

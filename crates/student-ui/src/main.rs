@@ -26,7 +26,7 @@ use slint::{CloseRequestResponse, Timer, TimerMode, Weak};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Revision of the policy whose per-user parts we last enforced.
 static LAST_APPLIED_REV: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
     let show_on_start = std::env::args().any(|a| a == "--show");
 
     let ui = MainWindow::new()?;
+    ui.set_app_icon(app_icon());
     let policy = store::load_policy();
     let gate = Rc::new(RefCell::new(store::load_gate(&policy)));
 
@@ -69,7 +70,6 @@ fn main() -> anyhow::Result<()> {
     apply_policy_display(&ui, &policy);
 
     wire_unlock(&ui, gate.clone());
-    wire_toggle_uwf(&ui);
     wire_window_buttons(&ui);
 
     // Tray is Windows-only (the deployment target). On dev platforms it is a
@@ -128,56 +128,34 @@ fn unlock_ok(ui: &MainWindow) {
     refresh(ui);
 }
 
-fn wire_toggle_uwf(ui: &MainWindow) {
-    let ui_w = ui.as_weak();
-    ui.on_toggle_uwf(move |target| {
-        let Some(ui) = ui_w.upgrade() else { return };
-        ui.set_busy(true);
-        ui.set_message(if target { "正在请求开启 UWF…" } else { "正在请求关闭 UWF…" }.into());
-        let back = ui.as_weak();
-        std::thread::spawn(move || {
-            let mut p = store::load_policy();
-            p.uwf_enabled = Some(target);
-            p.revision = now_ms();
-            let msg = match ipc::send(Command::PushPolicy { policy: p }) {
-                Ok(Report::Ack { note, .. }) => format!(
-                    "已提交，重启后生效{}",
-                    note.map(|n| format!("（{n}）")).unwrap_or_default()
-                ),
-                Ok(Report::Error { message, .. }) => format!("失败：{message}"),
-                Ok(_) => "已提交".to_string(),
-                Err(_) => "无法连接本机管理服务（labctl-student）。请确认该服务已安装并正在运行。".to_string(),
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = back.upgrade() {
-                    ui.set_busy(false);
-                    ui.set_message(msg.into());
-                    refresh(&ui);
-                }
-            });
-        });
-    });
-}
-
 fn wire_window_buttons(ui: &MainWindow) {
     let hide_w = ui.as_weak();
-    ui.on_hide_window(move || {
-        if let Some(u) = hide_w.upgrade() {
-            let _ = u.hide();
-        }
-    });
+    ui.on_hide_window(move || hide_and_lock(&hide_w));
+
+    // The in-window exit button is only reachable after unlocking, so a click
+    // here means the user already authenticated this session.
     ui.on_request_exit(move || {
         let _ = slint::quit_event_loop();
     });
 
-    // Closing the window hides to tray instead of quitting.
+    // Closing the window (X button / Alt+F4) never quits — it hides to the
+    // tray and re-locks, so exiting always requires the password again.
     let close_w = ui.as_weak();
     ui.window().on_close_requested(move || {
-        if let Some(u) = close_w.upgrade() {
-            let _ = u.hide();
-        }
+        hide_and_lock(&close_w);
         CloseRequestResponse::HideWindow
     });
+}
+
+/// Hide to tray and re-lock, clearing any entered password.
+fn hide_and_lock(ui_w: &Weak<MainWindow>) {
+    if let Some(u) = ui_w.upgrade() {
+        u.set_locked(true);
+        u.set_pw("".into());
+        u.set_pw2("".into());
+        u.set_message("".into());
+        let _ = u.hide();
+    }
 }
 
 // ---------------- status refresh ----------------
@@ -320,15 +298,17 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
 
 #[cfg(windows)]
 fn make_icon() -> tray_icon::Icon {
-    let (w, h) = (32usize, 32usize);
-    let mut rgba = vec![0u8; w * h * 4];
-    for px in rgba.chunks_mut(4) {
-        px[0] = 0x18;
-        px[1] = 0x18;
-        px[2] = 0x1b;
-        px[3] = 0xff;
-    }
-    tray_icon::Icon::from_rgba(rgba, w as u32, h as u32).expect("tray icon")
+    let rgba = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icon32.rgba")).to_vec();
+    tray_icon::Icon::from_rgba(rgba, 32, 32).expect("tray icon")
+}
+
+/// The window icon, decoded from the embedded raw RGBA (no PNG decoder needed).
+fn app_icon() -> slint::Image {
+    use slint::{Rgba8Pixel, SharedPixelBuffer};
+    let raw = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icon256.rgba"));
+    let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(256, 256);
+    buf.make_mut_bytes().copy_from_slice(raw);
+    slint::Image::from_rgba8(buf)
 }
 
 #[cfg(not(windows))]
@@ -372,9 +352,3 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
