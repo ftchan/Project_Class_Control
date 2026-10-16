@@ -150,6 +150,8 @@ $("drawer-apply").onclick = async () => {
     wallpaper_path: $("p-wallpaper-path").value.trim() || null,
     usb_storage: $("p-usb").value,
     uwf_enabled: uwfSel === "unmanaged" ? null : uwfSel === "true",
+    uwf_scope: $("p-uwf-scope").value,
+    disable_task_manager: $("p-taskmgr").checked,
     keep_service_alive: true,
     revision: Date.now(), // monotonic-enough per operator session
   };

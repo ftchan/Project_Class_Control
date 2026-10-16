@@ -79,12 +79,27 @@
       </label>
 
       <label class="field">
-        <span>客户端访问口令<small class="muted">留空表示不设置</small></span>
-        <input type="password" id="p-pass" placeholder="输入口令" />
+        <span>UWF 还原范围<small class="muted">开启 UWF 时，重启还原哪些磁盘</small></span>
+        <select id="p-uwf-scope">
+          <option value="system_only">仅系统盘（C:）</option>
+          <option value="all_volumes">所有固定磁盘</option>
+        </select>
+      </label>
+
+      <label class="switch-row">
+        <span>禁用任务管理器<small class="muted">防止学生强制结束客户端（等效组策略，可逆）</small></span>
+        <input type="checkbox" id="p-taskmgr" />
+      </label>
+
+      <label class="field">
+        <span>客户端访问口令<small class="muted">统一设置/修改全部学生端口令；留空＝不改动</small></span>
+        <input type="password" id="p-pass" placeholder="输入新口令" />
       </label>
 
       <div class="drawer-note muted">
-        策略通过局域网下发到选中/全部终端；UWF 变更需在学生机重启后生效。
+        策略通过局域网下发到选中/全部终端。<br />
+        UWF 首次开启需<b>重启一次激活</b>；激活后<b>每次重启都会还原</b>所选磁盘。
+        测试方法：开启→重启激活→再新建文件→再重启，文件应消失。
       </div>
     </div>
     <div class="drawer-foot">

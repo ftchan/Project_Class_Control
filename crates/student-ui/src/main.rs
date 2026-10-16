@@ -16,6 +16,7 @@
 
 mod ipc;
 mod store;
+mod userpolicy;
 
 slint::include_modules!();
 
@@ -24,7 +25,11 @@ use labctl_common::protocol::{Command, Report};
 use slint::{CloseRequestResponse, Timer, TimerMode, Weak};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Revision of the policy whose per-user parts we last enforced.
+static LAST_APPLIED_REV: AtomicU64 = AtomicU64::new(u64::MAX);
 
 fn main() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -42,9 +47,18 @@ fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "could not register autostart");
     }
 
+    // `--show` opens the window immediately (teacher launch / manual open).
+    // Without it, the client stays in the tray — no popup at boot/logon.
+    let show_on_start = std::env::args().any(|a| a == "--show");
+
     let ui = MainWindow::new()?;
     let policy = store::load_policy();
     let gate = Rc::new(RefCell::new(store::load_gate(&policy)));
+
+    // Enforce per-user policy right away (wallpaper lock, Task Manager lock),
+    // even while the window stays hidden in the tray.
+    userpolicy::apply(&policy);
+    LAST_APPLIED_REV.store(policy.revision, Ordering::Relaxed);
 
     ui.set_locked(true);
     ui.set_first_run(gate.borrow().first_run());
@@ -64,7 +78,9 @@ fn main() -> anyhow::Result<()> {
     let refresh_timer = refresh_timer(ui.as_weak());
     spawn_control_listener(ui.as_weak());
 
-    ui.show()?;
+    if show_on_start {
+        ui.show()?;
+    }
     slint::run_event_loop()?;
 
     drop(refresh_timer);
@@ -198,6 +214,12 @@ fn refresh(ui: &MainWindow) {
     let p = store::load_policy();
     apply_policy_display(ui, &p);
 
+    // Re-enforce per-user policy when the teacher pushed a new revision.
+    if LAST_APPLIED_REV.load(Ordering::Relaxed) != p.revision {
+        userpolicy::apply(&p);
+        LAST_APPLIED_REV.store(p.revision, Ordering::Relaxed);
+    }
+
     let back = ui.as_weak();
     std::thread::spawn(move || match ipc::send(Command::QueryStatus) {
         Ok(Report::Status(st)) => {
@@ -285,7 +307,12 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
                 }
             }
         }
-        while let Ok(_ev) = tray_rx.try_recv() {}
+        // A click on the tray icon shows the (locked) window.
+        while let Ok(ev) = tray_rx.try_recv() {
+            if let tray_icon::TrayIconEvent::Click { .. } = ev {
+                show_and_lock(&ui_w);
+            }
+        }
     });
 
     Box::new((tray, timer))

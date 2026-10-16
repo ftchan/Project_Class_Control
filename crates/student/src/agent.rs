@@ -201,7 +201,7 @@ fn launch_ui() -> Result<()> {
     } else {
         "labctl-student-ui"
     });
-    std::process::Command::new(ui_exe).spawn()?;
+    std::process::Command::new(ui_exe).arg("--show").spawn()?;
     Ok(())
 }
 

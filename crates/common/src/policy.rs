@@ -21,6 +21,17 @@ pub enum UsbStoragePolicy {
     Deny,
 }
 
+/// Which volumes UWF protects (and therefore restores on reboot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UwfScope {
+    /// Only the system drive (typically C:).
+    #[default]
+    SystemOnly,
+    /// Every fixed drive on the machine.
+    AllVolumes,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
     /// When true, the desktop wallpaper is pinned and the Settings/Personalize
@@ -41,6 +52,17 @@ pub struct Policy {
     /// A change only takes effect after the reboot UWF itself requires.
     #[serde(default)]
     pub uwf_enabled: Option<bool>,
+
+    /// Which volumes UWF should protect/restore when enabled.
+    #[serde(default)]
+    pub uwf_scope: UwfScope,
+
+    /// Disable Task Manager for the signed-in user (the documented
+    /// "Remove Task Manager" Group Policy, i.e. the `DisableTaskMgr` value).
+    /// Reversible: clearing it restores Task Manager. Applied in the user
+    /// session by the GUI client, not by the system service.
+    #[serde(default)]
+    pub disable_task_manager: bool,
 
     /// Argon2 PHC-format hash of the client access passphrase. When present,
     /// the local config UI requires it before settings can be viewed/changed.
@@ -70,6 +92,8 @@ impl Default for Policy {
             wallpaper_path: None,
             usb_storage: UsbStoragePolicy::Allow,
             uwf_enabled: None,
+            uwf_scope: UwfScope::SystemOnly,
+            disable_task_manager: false,
             config_passphrase_hash: None,
             keep_service_alive: true,
             revision: 0,

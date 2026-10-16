@@ -20,7 +20,7 @@ pub fn apply_policy(policy: &Policy) {
         tracing::error!(error = %e, "usb storage policy failed");
     }
     if let Some(desired) = policy.uwf_enabled {
-        if let Err(e) = uwf::apply(desired) {
+        if let Err(e) = uwf::apply(desired, policy.uwf_scope) {
             tracing::error!(error = %e, "uwf policy failed");
         }
     }

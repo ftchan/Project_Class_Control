@@ -13,6 +13,7 @@
 //! mandates; callers surface that to the operator.
 
 use anyhow::Result;
+use labctl_common::policy::UwfScope;
 
 #[cfg(windows)]
 mod imp {
@@ -47,13 +48,64 @@ mod imp {
     }
 
     /// Ensure the optional feature is installed, then enable/disable via
-    /// `uwfmgr`. Returns immediately; the change needs a reboot to apply.
-    pub fn apply(enabled: bool) -> Result<()> {
+    /// `uwfmgr`. When enabling, also set which volumes are protected (and thus
+    /// restored on reboot) per `scope`. Returns immediately; the change needs a
+    /// reboot to apply.
+    pub fn apply(enabled: bool, scope: UwfScope) -> Result<()> {
         ensure_feature()?;
         let sub = if enabled { "enable" } else { "disable" };
         run("uwfmgr.exe", &["filter", sub])?;
-        tracing::info!(enabled, "requested UWF state change (reboot required)");
+
+        if enabled {
+            for vol in target_volumes(scope) {
+                // Protect each target volume; already-protected is not an error.
+                if let Err(e) = run("uwfmgr.exe", &["volume", "protect", &vol]) {
+                    tracing::warn!(%vol, error = %e, "protect volume failed");
+                }
+            }
+        }
+
+        tracing::info!(enabled, ?scope, "requested UWF state change (reboot required)");
         Ok(())
+    }
+
+    /// The drive specs (e.g. "C:") to protect for the given scope.
+    fn target_volumes(scope: UwfScope) -> Vec<String> {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        match scope {
+            UwfScope::SystemOnly => vec![system],
+            UwfScope::AllVolumes => {
+                let mut drives = fixed_drives();
+                if drives.is_empty() {
+                    drives.push(system);
+                }
+                drives
+            }
+        }
+    }
+
+    /// Enumerate fixed (non-removable, non-network) drives as "X:" specs.
+    fn fixed_drives() -> Vec<String> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+        const DRIVE_FIXED: u32 = 3;
+
+        let mask = unsafe { GetLogicalDrives() };
+        let mut out = Vec::new();
+        for i in 0..26u32 {
+            if mask & (1 << i) == 0 {
+                continue;
+            }
+            let letter = (b'A' + i as u8) as char;
+            let root: Vec<u16> = format!("{letter}:\\")
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            if unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) } == DRIVE_FIXED {
+                out.push(format!("{letter}:"));
+            }
+        }
+        out
     }
 
     fn ensure_feature() -> Result<()> {
@@ -106,8 +158,8 @@ mod imp {
     pub fn is_enabled() -> Result<bool> {
         anyhow::bail!("UWF is Windows-only")
     }
-    pub fn apply(enabled: bool) -> Result<()> {
-        tracing::info!(enabled, "uwf apply (no-op on this platform)");
+    pub fn apply(enabled: bool, scope: UwfScope) -> Result<()> {
+        tracing::info!(enabled, ?scope, "uwf apply (no-op on this platform)");
         Ok(())
     }
     pub fn reboot(restore: bool, delay_secs: u32) -> Result<()> {
