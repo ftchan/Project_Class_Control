@@ -5,11 +5,12 @@
 .DESCRIPTION
   前置：安装 Rust (https://rustup.rs) 与 “Desktop development with C++”(MSVC 构建工具)。
   运行后产出：
-    dist\LabCtl\labctl-teacher.exe      教师端控制台（双击运行，自动打开浏览器控制台）
-    dist\LabCtl\labctl-student.exe      学生端（受管客户端）
-    dist\LabCtl\scripts\*               一键部署/卸载脚本
-    dist\LabCtl\README.md
-    dist\LabCtl-<version>.zip            整包压缩，便于分发
+    dist\LabCtl-<version>\labctl-teacher.exe   教师端控制台（双击运行，自动打开浏览器控制台）
+    dist\LabCtl-<version>\labctl-student.exe   学生端（受管客户端）
+    dist\LabCtl-<version>\scripts\*            一键部署/卸载脚本
+    dist\LabCtl-<version>\README.md
+    dist\LabCtl-<version>.zip                   整包压缩，便于分发
+  <version> 取自 Cargo.toml 的 [workspace.package] version。
 
 .PARAMETER Target
   Rust 目标三元组。默认 x86_64-pc-windows-msvc（64 位，推荐）。
@@ -36,9 +37,9 @@ try {
 
   $ver = (Select-String -Path (Join-Path $root "Cargo.toml") -Pattern '^version\s*=\s*"([^"]+)"' |
           Select-Object -First 1).Matches.Groups[1].Value
-  if (-not $ver) { $ver = "0.1.0" }
+  if (-not $ver) { throw "version not found in Cargo.toml" }
 
-  $out = Join-Path $root "dist\LabCtl"
+  $out = Join-Path $root "dist\LabCtl-$ver"
   Write-Host "== 打包到 $out ==" -ForegroundColor Cyan
   Remove-Item -Recurse -Force (Join-Path $root "dist") -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force -Path (Join-Path $out "scripts") | Out-Null

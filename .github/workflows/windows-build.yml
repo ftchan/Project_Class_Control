@@ -31,34 +31,42 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-msvc --bin labctl-teacher --bin labctl-student
 
       - name: Stage package
+        id: stage
         shell: pwsh
         run: |
+          # Version comes from Cargo.toml [workspace.package]; it names every package.
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+                  Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $ver) { throw "version not found in Cargo.toml" }
+          $name = "LabCtl-$ver"
+          $dir = "dist/$name"
           $bin = "target/x86_64-pc-windows-msvc/release"
-          New-Item -ItemType Directory -Force dist/LabCtl/scripts | Out-Null
-          Copy-Item "$bin/labctl-teacher.exe" dist/LabCtl/
-          Copy-Item "$bin/labctl-student.exe" dist/LabCtl/
-          Copy-Item "$bin/labctl-student.exe" dist/LabCtl/scripts/
-          Copy-Item README.md dist/LabCtl/
-          Copy-Item scripts/install-student.ps1   dist/LabCtl/scripts/
-          Copy-Item scripts/install-student.bat   dist/LabCtl/scripts/
-          Copy-Item scripts/uninstall-student.ps1 dist/LabCtl/scripts/
-          Copy-Item scripts/deploy-lab.ps1        dist/LabCtl/scripts/
+          New-Item -ItemType Directory -Force "$dir/scripts" | Out-Null
+          Copy-Item "$bin/labctl-teacher.exe" "$dir/"
+          Copy-Item "$bin/labctl-student.exe" "$dir/"
+          Copy-Item "$bin/labctl-student.exe" "$dir/scripts/"
+          Copy-Item README.md "$dir/"
+          Copy-Item scripts/install-student.ps1   "$dir/scripts/"
+          Copy-Item scripts/install-student.bat   "$dir/scripts/"
+          Copy-Item scripts/uninstall-student.ps1 "$dir/scripts/"
+          Copy-Item scripts/deploy-lab.ps1        "$dir/scripts/"
           @"
           @echo off
           cd /d "%~dp0"
           start "" "labctl-teacher.exe"
-          "@ | Set-Content -Path dist/LabCtl/启动教师端.bat -Encoding OEM
-          Compress-Archive -Path dist/LabCtl -DestinationPath LabCtl-windows.zip -Force
+          "@ | Set-Content -Path "$dir/启动教师端.bat" -Encoding OEM
+          Compress-Archive -Path $dir -DestinationPath "$name-windows.zip" -Force
+          "name=$name" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LabCtl-windows
-          path: dist/LabCtl
+          name: ${{ steps.stage.outputs.name }}-windows
+          path: dist/${{ steps.stage.outputs.name }}
 
       - name: Create release (on tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: LabCtl-windows.zip
+          files: ${{ steps.stage.outputs.name }}-windows.zip
           generate_release_notes: true

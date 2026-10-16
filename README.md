@@ -86,17 +86,19 @@ cargo build --release
    ```powershell
    .\scripts\build-release.ps1
    ```
-   产出 `dist\LabCtl\`（含两个 exe、部署脚本、`启动教师端.bat`）和 `dist\LabCtl-<版本>.zip`。
+   产出 `dist\LabCtl-<版本>\`（含两个 exe、部署脚本、`启动教师端.bat`）和 `dist\LabCtl-<版本>.zip`。
 
 2. **用 GitHub Actions 云端编译**（无需本地 Windows）
    仓库已带 [.github/workflows/windows-build.yml](.github/workflows/windows-build.yml)。
    推送代码或在 Actions 页手动触发，完成后在该次运行的 **Artifacts** 下载
-   `LabCtl-windows`（两个 exe + 脚本）；打 Release 时会自动附带 zip。
+   `LabCtl-<版本>-windows`（两个 exe + 脚本）；打 Release 时会自动附带 `LabCtl-<版本>-windows.zip`。
 
 3. **做成正规安装包 Setup.exe**（会进“程序和功能”）
    先执行第 1 步生成 exe，再用 [Inno Setup 6+](https://jrsoftware.org/isinfo.php)
-   编译 [installer/LabCtl.iss](installer/LabCtl.iss)，产出 `Output\LabCtl-Setup.exe`，
+   编译 [installer/LabCtl.iss](installer/LabCtl.iss)，产出 `Output\LabCtl-Setup-<版本>.exe`，
    安装时可勾选教师端/学生端（学生端自动注册服务）。
+
+版本号统一取自 `Cargo.toml` 的 `[workspace.package] version`，发布新版本时只改这一处。
 
 学生端的 Windows 专有功能（服务、注册表、WMI、截屏）仅在 **Windows 目标**编译；
 在其他平台上这些实现为记录日志的空操作，便于在本机开发与测试网络/逻辑部分。

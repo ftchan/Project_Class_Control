@@ -1,15 +1,19 @@
 ; LabCtl 安装包脚本（Inno Setup 6+）。
 ; 用法：先运行 scripts\build-release.ps1 生成 exe，再用 Inno Setup 编译本文件，
-; 产出 Output\LabCtl-Setup.exe —— 一个正规安装包，会出现在“程序和功能”中，
+; 产出 Output\LabCtl-Setup-<版本>.exe —— 一个正规安装包，会出现在“程序和功能”中，
 ; 可选择安装“教师端”或“学生端（受管客户端，自动注册服务）”。
 ;
 ; 仅用于学校内网、管理员授权的自有设备。
 
 #define MyAppName "LabCtl 机房课堂管理"
-#define MyAppVersion "0.1.0"
 #define MyAppPublisher "Lab Admin Tools"
 ; 相对本 .iss 的编译产物目录
 #define BinDir "..\target\x86_64-pc-windows-msvc\release"
+; 版本取自编译产物（即 Cargo.toml 的 [workspace.package] version），
+; 也可用 ISCC /DMyAppVersion=x.y.z 覆盖。
+#ifndef MyAppVersion
+  #define MyAppVersion GetStringFileInfo(BinDir + "\labctl-teacher.exe", "ProductVersion")
+#endif
 
 [Setup]
 AppId={{B6B8F3A2-0C1D-4E2A-9A77-LABCTL000001}
@@ -19,7 +23,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\LabCtl
 DefaultGroupName=LabCtl
 DisableProgramGroupPage=yes
-OutputBaseFilename=LabCtl-Setup
+OutputBaseFilename=LabCtl-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin
