@@ -1,15 +1,17 @@
 name: Windows build
 
-# 在 Windows 云端编译教师端 + 学生端为 exe，并作为构建产物上传。
-# 无需本地 Windows：推送代码或在 Actions 页面手动触发即可，完成后到
-# 本次运行的 "Artifacts" 下载 LabCtl-windows.zip。
+# 在 Windows 云端编译教师端 + 学生端为 exe。
+#  - 推送到 main/master 或手动触发：产物作为 Artifact 上传（需登录下载，会过期）。
+#  - 推送 vX.Y.Z 形式的 tag：额外创建 GitHub Release 并附带 zip（永久下载链接）。
 
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   workflow_dispatch:
-  release:
-    types: [ created ]
+
+permissions:
+  contents: write   # 允许用内置 token 创建 Release
 
 jobs:
   build:
@@ -41,6 +43,14 @@ jobs:
           Copy-Item scripts/install-student.bat   dist/LabCtl/scripts/
           Copy-Item scripts/uninstall-student.ps1 dist/LabCtl/scripts/
           Copy-Item scripts/deploy-lab.ps1        dist/LabCtl/scripts/
+          @"
+          @echo off
+          cd /d "%~dp0"
+          start "" "labctl-teacher.exe"
+          timeout /t 2 >nul
+          start "" http://127.0.0.1:8080
+          "@ | Set-Content -Path dist/LabCtl/启动教师端.bat -Encoding OEM
+          Compress-Archive -Path dist/LabCtl -DestinationPath LabCtl-windows.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -48,11 +58,9 @@ jobs:
           name: LabCtl-windows
           path: dist/LabCtl
 
-      - name: Attach to release
-        if: github.event_name == 'release'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist/LabCtl -DestinationPath LabCtl-windows.zip -Force
-          gh release upload ${{ github.event.release.tag_name }} LabCtl-windows.zip --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LabCtl-windows.zip
+          generate_release_notes: true
