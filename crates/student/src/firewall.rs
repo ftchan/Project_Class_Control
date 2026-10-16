@@ -15,14 +15,13 @@ pub fn ensure_rules() {
 
 #[cfg(windows)]
 fn add_rule(name: &str, proto: &str, port: u16) {
-    use std::process::Command;
     // Delete any existing rule with this name first, so repeated starts stay
     // idempotent instead of stacking duplicate rules.
-    let _ = Command::new("netsh")
+    let _ = crate::hidden_command("netsh")
         .args(["advfirewall", "firewall", "delete", "rule", &format!("name={name}")])
         .output();
 
-    let out = Command::new("netsh")
+    let out = crate::hidden_command("netsh")
         .args([
             "advfirewall", "firewall", "add", "rule",
             &format!("name={name}"),

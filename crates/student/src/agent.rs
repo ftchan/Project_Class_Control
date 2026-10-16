@@ -299,8 +299,10 @@ fn update_client(
         );
         let bat_path = std::env::temp_dir().join("labctl-update.bat");
         std::fs::write(&bat_path, bat).map_err(|e| anyhow::anyhow!("write updater: {e}"))?;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", "/min", &bat_path.to_string_lossy()])
+        // Run the script directly without a console window; the service
+        // stopping does not terminate this child.
+        crate::hidden_command("cmd")
+            .args(["/c", &bat_path.to_string_lossy()])
             .spawn()
             .map_err(|e| anyhow::anyhow!("spawn updater: {e}"))?;
         return Ok(format!("更新已计划（{size} 字节），服务将重启"));

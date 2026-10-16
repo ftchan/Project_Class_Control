@@ -19,7 +19,6 @@ use labctl_common::policy::UwfScope;
 mod imp {
     use super::*;
     use serde::Deserialize;
-    use std::process::Command;
     use wmi::{COMLibrary, WMIConnection};
 
     const NS: &str = "root\\standardcimv2\\embedded";
@@ -140,7 +139,7 @@ mod imp {
     }
 
     fn run(exe: &str, args: &[&str]) -> Result<()> {
-        let out = Command::new(exe).args(args).output()?;
+        let out = crate::hidden_command(exe).args(args).output()?;
         if !out.status.success() {
             anyhow::bail!(
                 "{exe} {:?} failed: {}",

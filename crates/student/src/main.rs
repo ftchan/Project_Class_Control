@@ -128,6 +128,21 @@ fn doctor() -> Result<()> {
     Ok(())
 }
 
+/// A `Command` that never opens a console window. This exe is GUI-subsystem,
+/// so console children (netsh, uwfmgr, ...) would otherwise flash a window
+/// whenever the agent runs in an interactive session.
+pub(crate) fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("LABCTL_LOG").unwrap_or_else(|_| EnvFilter::new("info"));

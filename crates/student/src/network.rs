@@ -8,8 +8,6 @@
 
 #[cfg(windows)]
 pub fn apply(block: bool) {
-    use std::process::Command;
-
     // Private + link-local + multicast + limited broadcast. Covers typical
     // school LANs and our UDP discovery.
     const LAN: &str =
@@ -18,7 +16,7 @@ pub fn apply(block: bool) {
     const IN_RULE: &str = "LabCtl Allow LAN (in)";
 
     let netsh = |args: &[&str]| {
-        let out = Command::new("netsh").args(args).output();
+        let out = crate::hidden_command("netsh").args(args).output();
         match out {
             Ok(o) if o.status.success() => true,
             Ok(o) => {
