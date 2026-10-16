@@ -190,6 +190,10 @@ impl Engine {
 
     /// Open a connection, send one command, return the first reply.
     async fn exchange(&self, addr: SocketAddr, cmd: Command) -> Result<Report> {
+        self.exchange_to(addr, cmd, Duration::from_secs(5)).await
+    }
+
+    async fn exchange_to(&self, addr: SocketAddr, cmd: Command, timeout: Duration) -> Result<Report> {
         let fut = async {
             let stream = TcpStream::connect(addr).await?;
             let (mut rd, mut wr) = stream.into_split();
@@ -199,7 +203,7 @@ impl Engine {
                 _ => anyhow::bail!("no reply"),
             }
         };
-        tokio::time::timeout(Duration::from_secs(5), fut)
+        tokio::time::timeout(timeout, fut)
             .await
             .context("client timed out")?
     }
@@ -229,6 +233,31 @@ impl Engine {
         let rec = self.record(id).await.context("unknown client")?;
         self.exchange(Self::addr_of(&rec)?, Command::RebootAndRestore { restore, delay_secs: delay })
             .await
+    }
+
+    /// Push a new client executable to every client and update it seamlessly.
+    pub async fn update_client_all(
+        &self,
+        filename: String,
+        target_path: Option<String>,
+        data_base64: String,
+        run_after: bool,
+    ) -> Vec<(Uuid, Result<Report>)> {
+        let mut out = Vec::new();
+        for rec in self.roster().await {
+            let cmd = Command::UpdateClient {
+                filename: filename.clone(),
+                target_path: target_path.clone(),
+                data_base64: data_base64.clone(),
+                run_after,
+            };
+            let r = match Self::addr_of(&rec) {
+                Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(90)).await,
+                Err(e) => Err(e),
+            };
+            out.push((rec.machine_id, r));
+        }
+        out
     }
 
     /// Broadcast the one-click "restore desktop defaults" to every client.

@@ -25,6 +25,8 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/pick-wallpaper", post(pick_wallpaper))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/apply-defaults", post(apply_defaults))
+        .route("/api/pick-exe", post(pick_exe))
+        .route("/api/update-client", post(update_client))
         .route("/api/policy", post(policy_all))
         .route("/api/clients/:id/policy", post(policy_one))
         .route("/api/clients/:id/launch", post(launch))
@@ -108,6 +110,66 @@ async fn policy_one(
     Json(policy): Json<Policy>,
 ) -> impl IntoResponse {
     reply(engine.push_policy(id, policy).await)
+}
+
+/// Native picker for the client .exe to push.
+async fn pick_exe() -> impl IntoResponse {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .add_filter("可执行文件", &["exe"])
+            .set_title("选择要下发的客户端程序")
+            .pick_file()
+            .map(|p| p.to_string_lossy().into_owned())
+    })
+    .await
+    .ok()
+    .flatten();
+    Json(json!({ "path": path })).into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateReq {
+    /// Path to the .exe on the console machine.
+    source_path: String,
+    /// Optional install path on the client; None = next to the agent.
+    #[serde(default)]
+    target_path: Option<String>,
+    /// Override the installed file name; defaults to the source basename.
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default = "default_true")]
+    run_after: bool,
+}
+
+async fn update_client(
+    State(engine): State<Arc<Engine>>,
+    Json(req): Json<UpdateReq>,
+) -> impl IntoResponse {
+    use base64::Engine as _;
+    let bytes = match tokio::fs::read(&req.source_path).await {
+        Ok(b) => b,
+        Err(e) => return error(&format!("读取文件失败：{e}")),
+    };
+    if bytes.is_empty() {
+        return error("所选文件为空");
+    }
+    let filename = req.filename.unwrap_or_else(|| {
+        std::path::Path::new(&req.source_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("labctl-student-ui.exe")
+            .to_string()
+    });
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let results = engine
+        .update_client_all(filename, req.target_path, data, req.run_after)
+        .await;
+    let body: Vec<_> = results
+        .into_iter()
+        .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))
+        .collect();
+    Json(json!({ "size": bytes.len(), "results": body })).into_response()
 }
 
 #[derive(Deserialize)]

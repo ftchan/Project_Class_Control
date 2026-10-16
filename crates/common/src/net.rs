@@ -5,8 +5,8 @@ use anyhow::Context;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Largest frame we will accept, to bound memory on malformed/hostile input.
-/// Thumbnails dominate size; 8 MiB is comfortably above a JPEG tile.
-pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// Large enough to carry a base64-encoded client executable for push updates.
+pub const MAX_FRAME: usize = 96 * 1024 * 1024;
 
 /// Write one envelope as a 4-byte big-endian length prefix + JSON body.
 pub async fn write_frame<W>(w: &mut W, env: &Envelope) -> anyhow::Result<()>

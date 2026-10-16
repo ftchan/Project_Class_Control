@@ -113,6 +113,12 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
                 Err(e) => Report::Error { command: "request_thumbnail".into(), message: e.to_string() },
             }
         }
+        Command::UpdateClient { filename, target_path, data_base64, run_after } => {
+            match update_client(&filename, target_path.as_deref(), &data_base64, run_after) {
+                Ok(note) => Report::Ack { command: "update_client".into(), note: Some(note) },
+                Err(e) => Report::Error { command: "update_client".into(), message: e.to_string() },
+            }
+        }
         Command::ApplyDefaults { wallpaper_path } => {
             // Per-user settings are applied by the GUI in the interactive
             // session; forward the request over the loopback control port.
@@ -211,6 +217,74 @@ fn launch_ui() -> Result<()> {
     });
     std::process::Command::new(ui_exe).arg("--show").spawn()?;
     Ok(())
+}
+
+/// Seamlessly replace a client executable and relaunch it.
+///
+/// Windows can't overwrite a running .exe, so we write the new bytes to a
+/// sibling `.new` file, stop the running copy, swap files, then relaunch.
+fn update_client(
+    filename: &str,
+    target_path: Option<&str>,
+    data_base64: &str,
+    run_after: bool,
+) -> anyhow::Result<String> {
+    use base64::Engine as _;
+    use std::path::PathBuf;
+
+    // Reject path separators in the bare filename to avoid surprises.
+    anyhow::ensure!(
+        !filename.contains(['/', '\\']) && filename.ends_with(".exe"),
+        "invalid client filename"
+    );
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| anyhow::anyhow!("bad base64: {e}"))?;
+    anyhow::ensure!(!bytes.is_empty(), "empty payload");
+
+    let target: PathBuf = match target_path {
+        Some(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => std::env::current_exe()?
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(filename),
+    };
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let new_path = target.with_extension("new");
+    std::fs::write(&new_path, &bytes).map_err(|e| anyhow::anyhow!("write new exe: {e}"))?;
+
+    // Stop any running copy so the file can be replaced.
+    let basename = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filename);
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/f", "/im", basename])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+    }
+
+    // Swap: move the old aside (ignored if absent), move new into place.
+    let old_path = target.with_extension("old");
+    let _ = std::fs::remove_file(&old_path);
+    if target.exists() {
+        std::fs::rename(&target, &old_path).map_err(|e| anyhow::anyhow!("archive old exe: {e}"))?;
+    }
+    std::fs::rename(&new_path, &target).map_err(|e| anyhow::anyhow!("install new exe: {e}"))?;
+    let _ = std::fs::remove_file(&old_path);
+
+    if run_after {
+        // Relaunch hidden in the tray (no --show) so the update is seamless.
+        std::process::Command::new(&target).spawn().ok();
+    }
+
+    Ok(format!("已更新 {basename}（{} 字节）", bytes.len()))
 }
 
 /// Send the "restore defaults" request to the GUI client's control port.

@@ -57,6 +57,20 @@ pub enum Command {
     /// mouse-cursor scheme, default desktop icon size, and (if a path is given
     /// and exists) a default wallpaper. Applied by the GUI in the user session.
     ApplyDefaults { wallpaper_path: Option<String> },
+
+    /// Push a new client executable and seamlessly update it: the agent writes
+    /// the bytes, stops the running copy, swaps the file, and (if `run_after`)
+    /// relaunches it hidden in the tray. Used to roll out a newer GUI client.
+    UpdateClient {
+        /// File name to install, e.g. "labctl-student-ui.exe".
+        filename: String,
+        /// Absolute target path; if `None`, install next to the agent exe.
+        target_path: Option<String>,
+        /// Base64-encoded executable bytes.
+        data_base64: String,
+        /// Relaunch the client after replacing it.
+        run_after: bool,
+    },
 }
 
 /// Replies and unsolicited reports a client sends to the console.

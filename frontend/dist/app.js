@@ -178,6 +178,24 @@ $("p-default-wallpaper-pick").onclick = async () => {
   } catch { toast("无法打开文件选择框"); }
 };
 
+$("btn-update-client").onclick = async () => {
+  let src;
+  try {
+    const r = await api.post("/api/pick-exe");
+    src = r.path;
+  } catch { toast("无法打开文件选择框"); return; }
+  if (!src) return; // cancelled
+  const target = prompt("学生机安装路径（留空＝与学生端服务同目录）：", "") || null;
+  const n = state.clients.size;
+  if (!confirm(`将所选客户端下发并无感更新到 ${n} 台终端，更新后自动运行？\n\n源文件：${src}${target ? "\n目标：" + target : ""}`)) return;
+  toast("正在下发客户端更新…");
+  try {
+    const res = await api.post("/api/update-client", { source_path: src, target_path: target, run_after: true });
+    const ok = (res.results || []).filter((r) => r.ok).length;
+    toast(`客户端更新：${ok}/${(res.results || []).length} 台成功（${Math.round((res.size || 0) / 1024)} KB）`);
+  } catch { toast("下发失败"); }
+};
+
 $("btn-defaults-all").onclick = async () => {
   const n = state.clients.size;
   if (!confirm(`将 ${n} 台终端的鼠标样式、桌面图标大小恢复为默认${$("p-default-wallpaper").value ? "，并统一设置默认壁纸" : ""}？`)) return;
