@@ -16,6 +16,8 @@ use uuid::Uuid;
 struct State {
     machine_id: Uuid,
     policy: Mutex<Policy>,
+    /// Failures from the most recent policy apply, reported in the status.
+    last_errors: std::sync::Mutex<Vec<String>>,
 }
 
 /// A future that resolves when the agent should stop.
@@ -51,6 +53,7 @@ pub async fn run(shutdown: ShutdownSignal) -> Result<()> {
     let state = Arc::new(State {
         machine_id: load_or_create_machine_id(),
         policy: Mutex::new(policy.clone()),
+        last_errors: std::sync::Mutex::new(Vec::new()),
     });
 
     // Bind and start serving FIRST, so the console/GUI can always reach us
@@ -59,9 +62,10 @@ pub async fn run(shutdown: ShutdownSignal) -> Result<()> {
     let tcp = TcpListener::bind(("0.0.0.0", DEFAULT_PORT)).await?;
     tracing::info!(port = DEFAULT_PORT, "agent listening");
 
+    let startup = state.clone();
     tokio::task::spawn_blocking(move || {
         tracing::info!(revision = policy.revision, "applying startup policy");
-        let _ = features::apply_policy(&policy);
+        *startup.last_errors.lock().unwrap() = features::apply_policy(&policy);
     });
 
     let discovery = spawn_discovery(state.clone());
@@ -165,6 +169,7 @@ async fn apply_push(state: &State, mut incoming: Policy) -> Report {
     let errors = tokio::task::spawn_blocking(move || features::apply_policy(&snap2))
         .await
         .unwrap_or_default();
+    *state.last_errors.lock().unwrap() = errors.clone();
     if let Err(e) = config::save(&snapshot) {
         return Report::Error { command: "push_policy".into(), message: e.to_string() };
     }
@@ -185,6 +190,7 @@ async fn status(state: &State) -> ClientStatus {
         policy_revision: policy.revision,
         uwf_enabled: features::current_uwf_enabled(),
         uwf_state: Some(features::uwf_state()),
+        errors: state.last_errors.lock().unwrap().clone(),
         session_locked: lock::configured_hash().is_some(),
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
     }

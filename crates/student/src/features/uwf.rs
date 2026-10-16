@@ -6,14 +6,15 @@
 //! the approach of the referenced UWF-Manager project
 //! (https://github.com/JIRBOY/UWF-Manager).
 //!
-//! State is **read** through the documented WMI namespace
-//! `root\standardcimv2\embedded` (class `UWF_Filter`). State is **changed** via
-//! the in-box `uwfmgr.exe` CLI, which is present once the feature is installed.
+//! State is both read and changed through the documented WMI namespace
+//! `root\standardcimv2\embedded` (`UWF_Filter`, `UWF_Volume`). The in-box
+//! `uwfmgr.exe` is not used to change it: it refuses on Pro editions ("filter
+//! enable failed"), while the WMI provider it wraps does not check the edition.
 //!
 //! Turning protection on from scratch takes two reboots: the first completes
-//! the feature install (uwfmgr cannot be used before it), then the agent's
-//! startup policy run enables the filter, which applies on the second reboot.
-//! [`state`] reports where a machine is in that sequence.
+//! the feature install (the WMI classes do not exist before it), then the
+//! agent's startup policy run enables the filter, which applies on the second
+//! reboot. [`state`] reports where a machine is in that sequence.
 
 use anyhow::Result;
 use labctl_common::policy::UwfScope;
@@ -44,6 +45,32 @@ mod imp {
         NextEnabled: Option<bool>,
     }
 
+    /// `UWF_Filter` with its object path, for method calls.
+    #[derive(Deserialize)]
+    #[serde(rename = "UWF_Filter")]
+    #[allow(non_snake_case)]
+    struct UwfFilterPath {
+        __Path: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename = "UWF_Volume")]
+    #[allow(non_snake_case)]
+    struct UwfVolume {
+        __Path: String,
+        /// true = settings of the current session, false = next session.
+        CurrentSession: Option<bool>,
+        DriveLetter: Option<String>,
+        Protected: Option<bool>,
+    }
+
+    /// Output of UWF methods: 0 on success, an error code otherwise.
+    #[derive(Deserialize)]
+    #[allow(non_snake_case)]
+    struct MethodResult {
+        ReturnValue: u32,
+    }
+
     #[derive(Deserialize, Debug)]
     #[serde(rename = "Win32_OptionalFeature")]
     #[allow(non_snake_case)]
@@ -52,10 +79,12 @@ mod imp {
         InstallState: Option<u32>,
     }
 
+    fn uwf_wmi() -> Result<WMIConnection> {
+        Ok(WMIConnection::with_namespace_path(NS, COMLibrary::new()?)?)
+    }
+
     fn query_filter() -> Result<UwfFilter> {
-        let com = COMLibrary::new()?;
-        let wmi = WMIConnection::with_namespace_path(NS, com)?;
-        let rows: Vec<UwfFilter> = wmi.query()?;
+        let rows: Vec<UwfFilter> = uwf_wmi()?.query()?;
         rows.into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("UWF_Filter not present; feature not installed?"))
@@ -126,28 +155,97 @@ mod imp {
             }
             if !feature_marked_enabled() {
                 tracing::info!("installing optional feature {FEATURE} via DISM");
-                run(
+                // 3010 = installed, reboot required: the normal outcome here.
+                run_ok(
                     "dism.exe",
                     &["/Online", "/Enable-Feature", &format!("/FeatureName:{FEATURE}"), "/All", "/NoRestart"],
+                    &[0, 3010],
                 )?;
             }
-            // uwfmgr only works after the reboot that finishes the install;
-            // the startup policy run after that reboot enables the filter.
+            // The WMI classes only appear after the reboot that finishes the
+            // install; the startup policy run after that reboot enables it.
             tracing::info!("UWF feature installed; reboot required before it can be enabled");
             return Ok(());
         }
 
-        run("uwfmgr.exe", &["filter", if enabled { "enable" } else { "disable" }])?;
         if enabled {
+            // Protect the volumes first so the filter never starts with
+            // nothing protected.
+            let mut failed = Vec::new();
             for vol in target_volumes(scope) {
-                // Protect each target volume; already-protected is not an error.
-                if let Err(e) = run("uwfmgr.exe", &["volume", "protect", &vol]) {
+                if let Err(e) = protect_volume(&vol) {
                     tracing::warn!(%vol, error = %e, "protect volume failed");
+                    failed.push(format!("{vol} {e}"));
                 }
             }
+            set_filter(true)?;
+            anyhow::ensure!(failed.is_empty(), "已开启筛选器，但以下磁盘保护失败：{}", failed.join("；"));
+        } else {
+            set_filter(false)?;
         }
         tracing::info!(enabled, ?scope, "requested UWF state change (reboot required)");
         Ok(())
+    }
+
+    /// `UWF_Filter.Enable()` / `Disable()`; applies after the next reboot.
+    fn set_filter(enabled: bool) -> Result<()> {
+        let wmi = uwf_wmi()?;
+        let rows: Vec<UwfFilterPath> = wmi.query()?;
+        let path = &rows.first().ok_or_else(|| anyhow::anyhow!("找不到 UWF_Filter 实例"))?.__Path;
+        let method = if enabled { "Enable" } else { "Disable" };
+        let out: MethodResult = wmi
+            .exec_instance_method::<UwfFilterPath, _, _>(method, path, ())
+            .map_err(|e| anyhow::anyhow!("UWF_Filter.{method}() 调用失败：{e}"))?;
+        check(&format!("UWF_Filter.{method}()"), out.ReturnValue)
+    }
+
+    /// Protect `drive` (e.g. "C:") from the next session on: call `Protect()`
+    /// on its next-session `UWF_Volume`, or create that entry when the volume
+    /// is not in the UWF configuration yet (documented approach; the wmi
+    /// crate cannot create instances, so PowerShell's CIM cmdlets do it).
+    fn protect_volume(drive: &str) -> Result<()> {
+        let wmi = uwf_wmi()?;
+        let volumes: Vec<UwfVolume> = wmi.query()?;
+        let next = volumes.iter().find(|v| {
+            v.CurrentSession == Some(false)
+                && v.DriveLetter.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(drive))
+        });
+        match next {
+            Some(v) if v.Protected == Some(true) => Ok(()),
+            Some(v) => {
+                let out: MethodResult = wmi
+                    .exec_instance_method::<UwfVolume, _, _>("Protect", &v.__Path, ())
+                    .map_err(|e| anyhow::anyhow!("UWF_Volume.Protect() 调用失败：{e}"))?;
+                check("UWF_Volume.Protect()", out.ReturnValue)
+            }
+            None => run(
+                "powershell.exe",
+                &[
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!(
+                        "$ErrorActionPreference='Stop'; New-CimInstance -Namespace root/standardcimv2/embedded \
+                         -ClassName UWF_Volume -Property @{{CurrentSession=$false; DriveLetter='{drive}'; Protected=$true}} | Out-Null"
+                    ),
+                ],
+            ),
+        }
+    }
+
+    /// Turn a UWF method's return value into a readable error.
+    fn check(what: &str, code: u32) -> Result<()> {
+        if code == 0 {
+            return Ok(());
+        }
+        let hint = match code {
+            0x8007_0005 | 5 => "拒绝访问（需要管理员/SYSTEM 权限）",
+            0x8007_0032 | 50 => "此 Windows 版本不支持该操作",
+            0x8007_0490 | 1168 => "找不到对象（磁盘不存在或未在 UWF 配置中）",
+            0x8004_1001 => "WMI 一般性错误",
+            _ => "未知错误",
+        };
+        anyhow::bail!("{what} 返回错误码 0x{code:08X}：{hint}")
     }
 
     /// The drive specs (e.g. "C:") to protect for the given scope.
@@ -202,9 +300,14 @@ mod imp {
     }
 
     fn run(exe: &str, args: &[&str]) -> Result<()> {
+        run_ok(exe, args, &[0])
+    }
+
+    /// Like [`run`], but `ok_codes` are exit codes that mean success.
+    fn run_ok(exe: &str, args: &[&str], ok_codes: &[i32]) -> Result<()> {
         let out = crate::hidden_command(exe).args(args).output()?;
-        if !out.status.success() {
-            // uwfmgr and DISM report errors on stdout, not stderr.
+        if !out.status.code().is_some_and(|c| ok_codes.contains(&c)) {
+            // DISM reports errors on stdout, PowerShell on stderr; keep both.
             let msg = [out.stdout.as_slice(), out.stderr.as_slice()]
                 .iter()
                 .map(|b| decode_console(b))

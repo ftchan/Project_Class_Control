@@ -25,6 +25,9 @@ pub struct ClientStatus {
     /// "on_next_boot" | "on" | "off_next_boot" | "error:<message>".
     #[serde(default)]
     pub uwf_state: Option<String>,
+    /// Failures from the most recent policy apply, in full, for the console.
+    #[serde(default)]
+    pub errors: Vec<String>,
     /// True while the foreground session is locked by our passphrase gate.
     pub session_locked: bool,
     pub agent_version: String,
