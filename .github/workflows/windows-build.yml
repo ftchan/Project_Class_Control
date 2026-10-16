@@ -1,8 +1,10 @@
 name: Windows build
 
-# 在 Windows 云端编译教师端 + 学生端为 exe。
-#  - 推送到 main/master 或手动触发：产物作为 Artifact 上传（需登录下载，会过期）。
-#  - 推送 vX.Y.Z 形式的 tag：额外创建 GitHub Release 并附带 zip（永久下载链接）。
+# 在 Windows 云端编译并分别打包教师端、学生端（与本地 build-release.ps1 完全一致）。
+#  - 每次运行：两个产品作为 Artifact 上传（需登录下载，会过期）。
+#  - 推送到 main/master 时，若 Cargo.toml 的版本 v<version> 还没有 tag：
+#    自动打 tag 并创建 GitHub Release，附带两个 zip 和两个安装包（永久下载链接）。
+#  - 手动推送 vX.Y.Z 形式的 tag：同样创建对应的 Release。
 
 on:
   push:
@@ -11,13 +13,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # 允许用内置 token 创建 Release
+  contents: write   # 允许用内置 token 打 tag、创建 Release
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要已有 tag 来判断是否要发布
 
       - name: Install Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
@@ -27,46 +31,67 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binaries
-        run: cargo build --release --target x86_64-pc-windows-msvc --bin labctl-teacher --bin labctl-student
-
-      - name: Stage package
-        id: stage
+      - name: Read version
+        id: ver
         shell: pwsh
         run: |
-          # Version comes from Cargo.toml [workspace.package]; it names every package.
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
                   Select-Object -First 1).Matches.Groups[1].Value
           if (-not $ver) { throw "version not found in Cargo.toml" }
-          $name = "LabCtl-$ver"
-          $dir = "dist/$name"
-          $bin = "target/x86_64-pc-windows-msvc/release"
-          New-Item -ItemType Directory -Force "$dir/scripts" | Out-Null
-          Copy-Item "$bin/labctl-teacher.exe" "$dir/"
-          Copy-Item "$bin/labctl-student.exe" "$dir/"
-          Copy-Item "$bin/labctl-student.exe" "$dir/scripts/"
-          Copy-Item README.md "$dir/"
-          Copy-Item scripts/install-student.ps1   "$dir/scripts/"
-          Copy-Item scripts/install-student.bat   "$dir/scripts/"
-          Copy-Item scripts/uninstall-student.ps1 "$dir/scripts/"
-          Copy-Item scripts/deploy-lab.ps1        "$dir/scripts/"
-          @"
-          @echo off
-          cd /d "%~dp0"
-          start "" "labctl-teacher.exe"
-          "@ | Set-Content -Path "$dir/启动教师端.bat" -Encoding OEM
-          Compress-Archive -Path $dir -DestinationPath "$name-windows.zip" -Force
-          "name=$name" >> $env:GITHUB_OUTPUT
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $tag = "${{ github.ref_name }}"; $release = "true"
+          } else {
+            $tag = "v$ver"
+            # 已有该版本的 tag（没升版本号）则只上传 Artifact，不重复发布
+            $release = if (git tag --list $tag) { "false" } else { "true" }
+            if ("${{ github.event_name }}" -ne "push") { $release = "false" }
+          }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "release=$release" >> $env:GITHUB_OUTPUT
+          Write-Host "version=$ver tag=$tag release=$release"
 
-      - name: Upload artifact
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup not available" }
+          # 简体中文是非官方语言包；取不到时安装包退回英文界面，不影响构建
+          $isl = Join-Path (Split-Path $iscc) "Languages\ChineseSimplified.isl"
+          if (-not (Test-Path $isl)) {
+            try {
+              Invoke-WebRequest "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile $isl
+            } catch { Write-Warning "ChineseSimplified.isl unavailable: $_" }
+          }
+
+      - name: Build and package
+        shell: pwsh
+        run: ./build-release.ps1
+
+      - name: Upload teacher artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.stage.outputs.name }}-windows
-          path: dist/${{ steps.stage.outputs.name }}
+          name: LabCtl-Teacher-${{ steps.ver.outputs.version }}
+          path: dist/LabCtl-Teacher-${{ steps.ver.outputs.version }}
 
-      - name: Create release (on tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Upload student artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabCtl-Student-${{ steps.ver.outputs.version }}
+          path: dist/LabCtl-Student-${{ steps.ver.outputs.version }}
+
+      - name: Tag and release
+        if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.stage.outputs.name }}-windows.zip
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: LabCtl ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/LabCtl-Teacher-${{ steps.ver.outputs.version }}.zip
+            dist/LabCtl-Student-${{ steps.ver.outputs.version }}.zip
+            dist/LabCtl-Teacher-Setup-${{ steps.ver.outputs.version }}.exe
+            dist/LabCtl-Student-Setup-${{ steps.ver.outputs.version }}.exe

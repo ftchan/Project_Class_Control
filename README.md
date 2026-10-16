@@ -76,29 +76,31 @@ cargo build --release
 #   target/release/labctl-teacher(.exe)
 ```
 
-### 打包成可运行的 Windows exe（三选一）
+### 打包：教师端、学生端是两个独立产品
 
 > 学生端依赖 Windows 专有库（服务 / WMI / 截屏），**必须在 Windows 目标下编译**，
 > 无法从 macOS/Linux 交叉编译。
 
+两端共用一个版本号，取自 `Cargo.toml` 的 `[workspace.package] version`，发布新版本时只改这一处。
+
+| 产品 | 目录 / zip | 内容 | 安装包 |
+|------|-----------|------|--------|
+| 教师端 | `LabCtl-Teacher-<版本>` | `labctl-teacher.exe`、`启动教师端.bat`、README | `LabCtl-Teacher-Setup-<版本>.exe` |
+| 学生端 | `LabCtl-Student-<版本>` | `students\`：`labctl-student.exe` 与安装/卸载/批量部署脚本 | `LabCtl-Student-Setup-<版本>.exe` |
+
 1. **在 Windows 本机一键编译+打包**（推荐）
-   先装好 [Rust](https://rustup.rs) 和 VS 的 “Desktop development with C++”(MSVC)，然后：
+   先装好 [Rust](https://rustup.rs) 和 VS 的 “Desktop development with C++”(MSVC)，然后在仓库根目录：
    ```powershell
-   .\scripts\build-release.ps1
+   .\build-release.ps1
    ```
-   产出 `dist\LabCtl-<版本>\`（含两个 exe、部署脚本、`启动教师端.bat`）和 `dist\LabCtl-<版本>.zip`。
+   产出 `dist\` 下两个产品的目录和 zip；若装有 [Inno Setup 6+](https://jrsoftware.org/isinfo.php)，
+   还会同时产出两个安装包（[installer/LabCtl-Teacher.iss](installer/LabCtl-Teacher.iss)、
+   [installer/LabCtl-Student.iss](installer/LabCtl-Student.iss)，会进“程序和功能”）。
 
 2. **用 GitHub Actions 云端编译**（无需本地 Windows）
-   仓库已带 [.github/workflows/windows-build.yml](.github/workflows/windows-build.yml)。
-   推送代码或在 Actions 页手动触发，完成后在该次运行的 **Artifacts** 下载
-   `LabCtl-<版本>-windows`（两个 exe + 脚本）；打 Release 时会自动附带 `LabCtl-<版本>-windows.zip`。
-
-3. **做成正规安装包 Setup.exe**（会进“程序和功能”）
-   先执行第 1 步生成 exe，再用 [Inno Setup 6+](https://jrsoftware.org/isinfo.php)
-   编译 [installer/LabCtl.iss](installer/LabCtl.iss)，产出 `Output\LabCtl-Setup-<版本>.exe`，
-   安装时可勾选教师端/学生端（学生端自动注册服务）。
-
-版本号统一取自 `Cargo.toml` 的 `[workspace.package] version`，发布新版本时只改这一处。
+   [.github/workflows/windows-build.yml](.github/workflows/windows-build.yml) 运行同一个 `build-release.ps1`。
+   每次推送后在该次运行的 **Artifacts** 下载 `LabCtl-Teacher-<版本>`、`LabCtl-Student-<版本>`。
+   推送到 main 时若 `v<版本>` 还没有 tag，会**自动打 tag 并创建 Release**，附带两个 zip 和两个安装包。
 
 学生端的 Windows 专有功能（服务、注册表、WMI、截屏）仅在 **Windows 目标**编译；
 在其他平台上这些实现为记录日志的空操作，便于在本机开发与测试网络/逻辑部分。
@@ -113,9 +115,9 @@ cargo build --release
 ## 部署（机房管理员）
 
 ### A. 单机一键部署（最简单）
-把以下三个文件放到同一个 U 盘/目录：
-`labctl-student.exe`、`scripts\install-student.bat`、`scripts\install-student.ps1`，
-在每台教学机**双击 `install-student.bat`**（会自动弹 UAC 提权）。它会：
+把学生端产品里的 `students\` 文件夹（含 `labctl-student.exe`、`install-student.bat`、
+`install-student.ps1`）拷到 U 盘，在每台教学机**双击 `install-student.bat`**（会自动弹 UAC 提权）。
+也可以直接运行 `LabCtl-Student-Setup-<版本>.exe` 安装。它会：
 复制程序 → 写入初始策略 → （需要时）安装 UWF 功能 → 注册并启动服务。
 
 机房默认策略在 `install-student.bat` 顶部这行改：
@@ -126,7 +128,7 @@ REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase la
 
 也可直接用 PowerShell（管理员）精细控制：
 ```powershell
-.\scripts\install-student.ps1 -LockWallpaper -Usb readonly -Uwf on -Passphrase "lab-2016"
+.\students\install-student.ps1 -LockWallpaper -Usb readonly -Uwf on -Passphrase "lab-2016"
 ```
 参数：`-Usb allow|readonly|deny`、`-Uwf on|off|unmanaged`、`-WallpaperPath <图片>`、
 `-InstallDir <目录>`、`-Passphrase <口令>`。
@@ -135,15 +137,15 @@ REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase la
 前提：目标机开启 `admin$` 共享、账号有管理员权限、已装 [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec)。
 把所有教学机的主机名/IP 写进 `pcs.txt`（每行一个），然后：
 ```powershell
-.\scripts\deploy-lab.ps1 -HostsFile .\pcs.txt -ExePath .\labctl-student.exe `
+.\students\deploy-lab.ps1 -HostsFile .\pcs.txt -ExePath .\students\labctl-student.exe `
     -PolicyArgs "-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
 ```
 > 校内也可改用**组策略（GPO）启动脚本**或 SCCM/Intune 分发 `install-student.ps1`，原理相同。
 
 ### C. 卸载
 ```powershell
-.\scripts\uninstall-student.ps1          # 停止服务、删除程序与数据
-.\scripts\uninstall-student.ps1 -KeepData # 保留策略/日志
+.\students\uninstall-student.ps1          # 停止服务、删除程序与数据
+.\students\uninstall-student.ps1 -KeepData # 保留策略/日志
 ```
 > 卸载**不会**自动回退壁纸/U盘等注册表策略；如需恢复，先在控制台下发
 > “解锁壁纸 + U盘允许 + UWF不管理”的空策略，再卸载。
