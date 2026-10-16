@@ -24,6 +24,7 @@ pub fn apply_policy(policy: &Policy) {
             tracing::error!(error = %e, "uwf policy failed");
         }
     }
+    crate::network::apply(policy.block_internet);
 }
 
 /// Collect the current UWF state for status reports.

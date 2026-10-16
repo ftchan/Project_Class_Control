@@ -82,10 +82,10 @@ fn set_wallpaper_now(path: &str) -> anyhow::Result<()> {
 }
 
 /// One-click "restore desktop defaults" for the signed-in user:
-///   * default mouse-cursor scheme,
-///   * default desktop icon size (48 px, "medium"),
+///   * default mouse-cursor scheme (applied immediately),
+///   * default desktop icon size (48 px; registry only — takes effect on the
+///     next Explorer restart / sign-in, per requirement: no Explorer restart),
 ///   * default wallpaper (only if `wallpaper` is given and the file exists).
-/// Explorer is refreshed at the end so the icon size takes effect immediately.
 #[cfg(windows)]
 pub fn apply_defaults(wallpaper: Option<&str>) {
     if let Err(e) = reset_cursors() {
@@ -103,7 +103,6 @@ pub fn apply_defaults(wallpaper: Option<&str>) {
             tracing::info!(path = p, "default wallpaper path missing; skipping");
         }
     }
-    refresh_explorer();
 }
 
 #[cfg(windows)]
@@ -151,15 +150,6 @@ fn reset_icon_size() -> anyhow::Result<()> {
         hkcu.create_subkey(r"Software\Microsoft\Windows\Shell\Bags\1\Desktop")?;
     desktop.set_value("IconSize", &48u32)?;
     Ok(())
-}
-
-#[cfg(windows)]
-fn refresh_explorer() {
-    // Restart the shell so cursor/wallpaper/icon-size changes show at once.
-    // This restarts the taskbar/desktop only; the user's open apps keep running.
-    use std::process::Command;
-    let _ = Command::new("taskkill").args(["/f", "/im", "explorer.exe"]).output();
-    let _ = Command::new("cmd").args(["/C", "start", "", "explorer.exe"]).spawn();
 }
 
 #[cfg(not(windows))]

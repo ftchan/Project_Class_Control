@@ -6,11 +6,13 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Safe lab baseline used when no policy has been deployed yet: USB mass
-/// storage is denied (no insertion / read / write). An administrator can
-/// loosen this from the teacher console at any time.
+/// storage is denied and internet access is blocked (LAN stays up so the
+/// teacher console can still manage the machine). An administrator can loosen
+/// either of these from the teacher console at any time.
 pub fn default_policy() -> Policy {
     Policy {
         usb_storage: UsbStoragePolicy::Deny,
+        block_internet: true,
         ..Policy::default()
     }
 }

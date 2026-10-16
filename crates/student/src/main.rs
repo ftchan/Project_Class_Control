@@ -14,6 +14,7 @@ mod agent;
 mod config;
 mod features;
 mod firewall;
+mod network;
 mod capture;
 mod lock;
 #[cfg(windows)]

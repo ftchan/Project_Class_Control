@@ -145,6 +145,7 @@ function collectSettings() {
     uwf: $("p-uwf").value,
     uwf_scope: $("p-uwf-scope").value,
     disable_task_manager: $("p-taskmgr").checked,
+    block_internet: $("p-block-internet").checked,
     default_wallpaper: $("p-default-wallpaper").value,
   };
 }
@@ -157,6 +158,7 @@ function applySettings(s) {
   if (s.uwf) $("p-uwf").value = s.uwf;
   if (s.uwf_scope) $("p-uwf-scope").value = s.uwf_scope;
   if (typeof s.disable_task_manager === "boolean") $("p-taskmgr").checked = s.disable_task_manager;
+  if (typeof s.block_internet === "boolean") $("p-block-internet").checked = s.block_internet;
   if (typeof s.default_wallpaper === "string") $("p-default-wallpaper").value = s.default_wallpaper;
 }
 
@@ -193,6 +195,7 @@ $("drawer-apply").onclick = async () => {
     uwf_enabled: uwfSel === "unmanaged" ? null : uwfSel === "true",
     uwf_scope: $("p-uwf-scope").value,
     disable_task_manager: $("p-taskmgr").checked,
+    block_internet: $("p-block-internet").checked,
     keep_service_alive: true,
     revision: Date.now(), // monotonic-enough per operator session
   };

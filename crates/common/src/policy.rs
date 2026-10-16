@@ -64,6 +64,13 @@ pub struct Policy {
     #[serde(default)]
     pub disable_task_manager: bool,
 
+    /// Block internet access while keeping the local network usable (so the
+    /// teacher console can still manage the machine). Implemented via Windows
+    /// Firewall: default-deny outbound with allow rules for private/LAN ranges
+    /// and the management ports. Reversible. Enforced by the system service.
+    #[serde(default)]
+    pub block_internet: bool,
+
     /// Argon2 PHC-format hash of the client access passphrase. When present,
     /// the local config UI requires it before settings can be viewed/changed.
     #[serde(default)]
@@ -94,6 +101,7 @@ impl Default for Policy {
             uwf_enabled: None,
             uwf_scope: UwfScope::SystemOnly,
             disable_task_manager: false,
+            block_internet: false,
             config_passphrase_hash: None,
             keep_service_alive: true,
             revision: 0,
