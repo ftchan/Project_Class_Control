@@ -30,6 +30,8 @@ pub struct ClientRecord {
     pub status: Option<ClientStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<ScreenThumbnail>,
+    /// Why the last screen capture failed (e.g. the client GUI is not running).
+    pub thumbnail_error: Option<String>,
     pub last_seen: chrono::DateTime<chrono::Utc>,
     pub online: bool,
 }
@@ -162,6 +164,7 @@ impl Engine {
             addr: addr.clone(),
             status: None,
             thumbnail: None,
+            thumbnail_error: None,
             last_seen: chrono::Utc::now(),
             online: true,
         });
@@ -196,15 +199,19 @@ impl Engine {
         }
 
         // Thumbnail
-        if let Ok(Report::Thumbnail(t)) = self
-            .exchange(addr, Command::RequestThumbnail { max_dim: self.thumb_dim })
-            .await
-        {
-            let mut map = self.clients.write().await;
-            if let Some(r) = map.get_mut(&id) {
+        let shot = self.exchange(addr, Command::RequestThumbnail { max_dim: self.thumb_dim }).await;
+        let mut map = self.clients.write().await;
+        let Some(r) = map.get_mut(&id) else { return Ok(()) };
+        match shot {
+            Ok(Report::Thumbnail(t)) => {
                 r.thumbnail = Some(t.clone());
+                r.thumbnail_error = None;
+                drop(map);
+                let _ = self.events.send(Event::Thumbnail { machine_id: id, thumbnail: t });
             }
-            let _ = self.events.send(Event::Thumbnail { machine_id: id, thumbnail: t });
+            Ok(Report::Error { message, .. }) => r.thumbnail_error = Some(message),
+            Ok(_) => r.thumbnail_error = Some("unexpected reply".into()),
+            Err(e) => r.thumbnail_error = Some(e.to_string()),
         }
         Ok(())
     }
@@ -255,6 +262,13 @@ impl Engine {
             async move { (rec.machine_id, self.push_policy(rec.machine_id, policy).await) }
         }))
         .await
+    }
+
+    /// A larger screen capture on demand, for the full-screen view.
+    pub async fn screen(&self, id: Uuid, max_dim: u32) -> Result<Report> {
+        let rec = self.record(id).await.context("unknown client")?;
+        self.exchange_to(Self::addr_of(&rec)?, Command::RequestThumbnail { max_dim }, Duration::from_secs(10))
+            .await
     }
 
     pub async fn launch_ui(&self, id: Uuid) -> Result<Report> {

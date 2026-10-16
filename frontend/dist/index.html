@@ -145,6 +145,33 @@
   </div>
 </div>
 
+<!-- Full-screen view of one terminal -->
+<div id="viewer" class="viewer" hidden>
+  <div class="viewer-head">
+    <div class="viewer-title">
+      <b id="v-host"></b>
+      <span id="v-addr" class="viewer-muted"></span>
+      <span id="v-updated" class="viewer-muted"></span>
+    </div>
+    <div class="viewer-actions">
+      <button class="btn btn-outline" id="v-full">全屏</button>
+      <button class="btn btn-outline" id="v-close">关闭</button>
+    </div>
+  </div>
+  <div class="viewer-body">
+    <div class="viewer-screen">
+      <img id="v-img" alt="学生机画面" hidden />
+      <div id="v-noimg" class="viewer-muted">正在获取画面…</div>
+    </div>
+    <aside class="viewer-side">
+      <h3>终端状态</h3>
+      <dl id="v-info"></dl>
+      <h3>错误与警告</h3>
+      <ul id="v-issues" class="viewer-issues"></ul>
+    </aside>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 <script src="app.js"></script>
 </body>

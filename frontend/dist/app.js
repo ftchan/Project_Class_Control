@@ -76,6 +76,21 @@ function usbLabel(v) {
   return { allow: "U盘:允许", read_only: "U盘:只读", deny: "U盘:禁用" }[v] || "U盘:—";
 }
 
+// Text from terminals goes into innerHTML; never let it become markup.
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+
+// Every problem a terminal reports, in full: UWF errors, policy apply
+// failures, and why its screen could not be captured.
+function issuesOf(c) {
+  const st = c.status || {};
+  const out = [];
+  if (st.uwf_state?.startsWith("error:")) out.push(`UWF：${st.uwf_state.slice(6)}`);
+  for (const e of st.errors || []) out.push(e);
+  if (c.thumbnail_error) out.push(`画面：${c.thumbnail_error}`);
+  return out;
+}
+
 function render() {
   const grid = $("grid");
   const list = [...state.clients.values()].sort((a, b) => a.hostname.localeCompare(b.hostname));
@@ -92,33 +107,41 @@ function render() {
 
     const thumb = c.thumbnail
       ? `<img class="thumb" alt="screen" src="data:image/jpeg;base64,${c.thumbnail.jpeg_base64}" />`
-      : `<div class="thumb thumb-empty">无画面</div>`;
+      : `<div class="thumb thumb-empty">无画面${c.thumbnail_error ? `<small>${esc(c.thumbnail_error)}</small>` : ""}</div>`;
 
     const [uwfText, uwfClass, uwfTip] = uwfLabel(st);
-    const uwf = `<span class="pill ${uwfClass}" title="${(uwfTip || "").replace(/"/g, "&quot;")}">${uwfText}</span>`;
-    const user = st.logged_in_user ? `用户:${st.logged_in_user}` : "未登录";
+    const uwf = `<span class="pill ${uwfClass}" title="${esc(uwfTip)}">${esc(uwfText)}</span>`;
+    const user = st.logged_in_user ? `用户:${esc(st.logged_in_user)}` : "未登录";
     const lock = st.session_locked ? `<span class="pill">口令保护</span>` : "";
+    // Without a screenshot the capture error is already shown in its place.
+    const issues = issuesOf(c).filter((i) => c.thumbnail || !i.startsWith("画面："));
+    const issueList = issues.length
+      ? `<ul class="card-issues">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`
+      : "";
 
     card.innerHTML = `
-      ${thumb}
+      <a class="thumb-wrap" data-view="${c.machine_id}" title="点击查看全屏画面与详细状态">${thumb}</a>
       <div class="card-body">
         <div class="card-title">
-          <h3><span class="dot ${c.online ? "on" : "off"}"></span> ${c.hostname}</h3>
-          <span class="muted" style="font-size:12px">${c.addr}</span>
+          <h3><span class="dot ${c.online ? "on" : "off"}"></span> ${esc(c.hostname)}</h3>
+          <span class="muted" style="font-size:12px">${esc(c.addr)}</span>
         </div>
         <div class="meta">
           <span class="pill">${user}</span>
           ${uwf}
-          <span class="pill">rev ${st.policy_revision ?? 0}</span>
+          <span class="pill">rev ${esc(st.policy_revision ?? 0)}</span>
           ${lock}
         </div>
+        ${issueList}
       </div>
       <div class="card-actions">
+        <button class="btn btn-outline btn-sm" data-act="view" data-id="${c.machine_id}">查看</button>
         <button class="btn btn-outline btn-sm" data-act="launch" data-id="${c.machine_id}">唤起</button>
         <button class="btn btn-danger btn-sm" data-act="reboot" data-id="${c.machine_id}">重启还原</button>
       </div>`;
     grid.appendChild(card);
   }
+  renderViewer();
 }
 
 function upsert(client) {
@@ -149,9 +172,12 @@ function connectWs() {
 
 // --- Actions ---
 document.addEventListener("click", async (e) => {
+  const shot = e.target.closest("[data-view]");
+  if (shot) return openViewer(shot.dataset.view);
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
   const id = btn.dataset.id;
+  if (btn.dataset.act === "view") return openViewer(id);
   const done = (res, okMsg) =>
     toast(res.ok && res.report?.type !== "error" ? okMsg : `失败：${res.error || res.report?.message || "未知原因"}`);
   if (btn.dataset.act === "launch") {
@@ -301,6 +327,86 @@ $("drawer-apply").onclick = (e) => busy(e.currentTarget, "下发中…", async (
   const res = await api.post("/api/policy", policy);
   closeDrawer();
   summarize("策略下发", res);
+});
+
+// --- Full-screen terminal view ---
+const viewer = { id: null, timer: null, loading: false };
+
+function openViewer(id) {
+  viewer.id = id;
+  $("v-img").hidden = true;
+  $("v-noimg").hidden = false;
+  $("v-noimg").textContent = "正在获取画面…";
+  $("viewer").hidden = false;
+  renderViewer();
+  refreshScreen();
+  clearInterval(viewer.timer);
+  viewer.timer = setInterval(refreshScreen, 2000);
+}
+
+function closeViewer() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("viewer").hidden = true;
+  viewer.id = null;
+  clearInterval(viewer.timer);
+}
+
+// A larger capture than the grid thumbnail, refreshed while the view is open.
+async function refreshScreen() {
+  const id = viewer.id;
+  if (!id || viewer.loading) return;
+  viewer.loading = true;
+  try {
+    const r = await api.get(`/api/clients/${id}/screen?max=1600`);
+    if (viewer.id !== id) return;
+    if (r.ok && r.report?.type === "thumbnail") {
+      $("v-img").src = `data:image/jpeg;base64,${r.report.jpeg_base64}`;
+      $("v-img").hidden = false;
+      $("v-noimg").hidden = true;
+      $("v-updated").textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+    } else {
+      $("v-img").hidden = true;
+      $("v-noimg").hidden = false;
+      $("v-noimg").textContent = `无法获取画面：${r.error || r.report?.message || "未知原因"}`;
+    }
+  } catch {
+    $("v-noimg").textContent = "无法连接教师端服务";
+  } finally {
+    viewer.loading = false;
+  }
+}
+
+function renderViewer() {
+  const c = viewer.id && state.clients.get(viewer.id);
+  if (!c) return;
+  const st = c.status || {};
+  $("v-host").textContent = c.hostname;
+  $("v-addr").textContent = c.addr;
+  const rows = [
+    ["状态", c.online ? "在线" : "离线"],
+    ["登录用户", st.logged_in_user || "—"],
+    ["地址", c.addr],
+    ["客户端版本", st.agent_version || "—"],
+    ["UWF", uwfLabel(st)[0].replace(/^UWF:/, "")],
+    ["策略版本", st.policy_revision ?? 0],
+    ["口令保护", st.session_locked ? "是" : "否"],
+    ["最后在线", c.last_seen ? new Date(c.last_seen).toLocaleString() : "—"],
+  ];
+  $("v-info").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  const issues = issuesOf(c);
+  $("v-issues").innerHTML = issues.length
+    ? issues.map((i) => `<li>${esc(i)}</li>`).join("")
+    : `<li class="ok">没有错误</li>`;
+}
+
+$("v-close").onclick = closeViewer;
+$("v-full").onclick = () =>
+  document.fullscreenElement ? document.exitFullscreen() : $("viewer").requestFullscreen().catch(() => {});
+document.addEventListener("fullscreenchange", () => {
+  $("v-full").textContent = document.fullscreenElement ? "退出全屏" : "全屏";
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && viewer.id && !document.fullscreenElement) closeViewer();
 });
 
 // boot

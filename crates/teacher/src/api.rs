@@ -5,7 +5,7 @@ use crate::engine::Engine;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
     routing::{get, post},
@@ -30,6 +30,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/policy", post(policy_all))
         .route("/api/clients/:id/policy", post(policy_one))
         .route("/api/clients/:id/launch", post(launch))
+        .route("/api/clients/:id/screen", get(screen))
         .route("/api/clients/:id/reboot", post(reboot))
         .route("/ws", get(ws_upgrade))
         .fallback(assets::serve)
@@ -232,6 +233,20 @@ async fn apply_defaults(
 
 async fn launch(State(engine): State<Arc<Engine>>, Path(id): Path<Uuid>) -> impl IntoResponse {
     reply(engine.launch_ui(id).await)
+}
+
+#[derive(Deserialize)]
+struct ScreenQuery {
+    max: Option<u32>,
+}
+
+/// Larger capture for the full-screen view (the grid uses small thumbnails).
+async fn screen(
+    State(engine): State<Arc<Engine>>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<ScreenQuery>,
+) -> impl IntoResponse {
+    reply(engine.screen(id, q.max.unwrap_or(1600).clamp(320, 1920)).await)
 }
 
 #[derive(Deserialize)]
