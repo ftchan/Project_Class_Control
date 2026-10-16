@@ -140,9 +140,24 @@ if (Test-Path $uiExe) {
   Start-Process -FilePath $uiExe -ErrorAction SilentlyContinue
 }
 
+# --- 防火墙：放行教师端访问（LAN 入站 TCP 47800 / UDP 47801）---
+Write-Host "配置防火墙放行规则 ..." -ForegroundColor Cyan
+netsh advfirewall firewall delete rule name="LabCtl Agent (TCP 47800)"      2>$null | Out-Null
+netsh advfirewall firewall delete rule name="LabCtl Discovery (UDP 47801)"  2>$null | Out-Null
+netsh advfirewall firewall add rule name="LabCtl Agent (TCP 47800)"     dir=in action=allow protocol=TCP localport=47800 profile=any | Out-Null
+netsh advfirewall firewall add rule name="LabCtl Discovery (UDP 47801)" dir=in action=allow protocol=UDP localport=47801 profile=any | Out-Null
+
+# --- 校验服务是否真的在运行 ---
+Start-Sleep -Seconds 2
+$svc = Get-Service -Name LabCtlStudent -ErrorAction SilentlyContinue
+if (-not $svc -or $svc.Status -ne 'Running') {
+  Write-Host "⚠ 服务未处于运行状态（当前：$($svc.Status)）。请运行 '$targetExe doctor' 排查。" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "✔ 部署完成。" -ForegroundColor Green
 Write-Host "  可执行文件 : $targetExe"
+Write-Host "  服务状态   : $((Get-Service LabCtlStudent -ErrorAction SilentlyContinue).Status)"
 if (Test-Path $uiExe) { Write-Host "  GUI 客户端 : $uiExe（托盘常驻，开机自启）" }
 Write-Host "  策略文件   : $policyPath"
 Write-Host "  服务名     : LabCtlStudent（services.msc 可见，可正常停止/卸载）"

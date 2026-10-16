@@ -143,6 +143,29 @@ REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase la
 > 卸载**不会**自动回退壁纸/U盘等注册表策略；如需恢复，先在控制台下发
 > “解锁壁纸 + U盘允许 + UWF不管理”的空策略，再卸载。
 
+### 排错：GUI 提示"计算机积极拒绝" / 教师机看不到学生机
+
+GUI 客户端只是界面，真正监听端口、被教师端连接的是后台服务 `labctl-student`。
+"积极拒绝"(错误 10061)= 本机 47800 端口没人监听，即**服务没在运行**。
+
+在学生机（管理员）依次检查：
+```bash
+"C:\Program Files\LabCtl\labctl-student.exe" doctor
+```
+```bash
+sc query LabCtlStudent
+netstat -ano | findstr 47800
+```
+- 服务不是 `RUNNING` → 多半是**没用一键脚本/没用管理员装**，只运行了 GUI。
+  重新以管理员运行 `install-student.bat`（或 `labctl-student install`）。
+- 服务在跑、但教师机发现不到 → **防火墙**。新版安装器与服务启动时会自动放行
+  TCP 47800 / UDP 47801；若仍不行，手动执行：
+  ```bash
+  netsh advfirewall firewall add rule name="LabCtl Agent (TCP 47800)" dir=in action=allow protocol=TCP localport=47800 profile=any
+  netsh advfirewall firewall add rule name="LabCtl Discovery (UDP 47801)" dir=in action=allow protocol=UDP localport=47801 profile=any
+  ```
+- 教师机与学生机需在**同一子网**且允许 UDP 广播（跨 VLAN/AP 隔离会导致发现失败）。
+
 ### 日常管理
 - 按需在控制台“班级策略”中调整并下发（UWF 变更需学生机重启后生效）。
 - 教师机运行 `labctl-teacher`，浏览器打开控制台进行巡览与管理。

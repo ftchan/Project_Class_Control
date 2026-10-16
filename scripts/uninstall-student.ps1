@@ -29,6 +29,10 @@ if (Test-Path $exe) {
   sc.exe delete LabCtlStudent 2>$null | Out-Null
 }
 
+# 移除防火墙规则
+netsh advfirewall firewall delete rule name="LabCtl Agent (TCP 47800)"     2>$null | Out-Null
+netsh advfirewall firewall delete rule name="LabCtl Discovery (UDP 47801)" 2>$null | Out-Null
+
 # 结束 GUI 客户端并移除自启项
 Stop-Process -Name "labctl-student-ui" -Force -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" `

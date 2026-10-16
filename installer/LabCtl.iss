@@ -60,12 +60,21 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 ; 安装学生端：注册并启动服务（install 子命令内部完成 SCM 注册与失败恢复设置）。
 Filename: "{app}\labctl-student.exe"; Parameters: "install"; Components: student; \
   Flags: runhidden waituntilterminated; StatusMsg: "正在注册学生端服务..."
+; 防火墙放行教师端访问（LAN 入站 TCP 47800 / UDP 47801）。
+Filename: "{sys}\netsh.exe"; Components: student; Flags: runhidden; \
+  Parameters: "advfirewall firewall add rule name=""LabCtl Agent (TCP 47800)"" dir=in action=allow protocol=TCP localport=47800 profile=any"
+Filename: "{sys}\netsh.exe"; Components: student; Flags: runhidden; \
+  Parameters: "advfirewall firewall add rule name=""LabCtl Discovery (UDP 47801)"" dir=in action=allow protocol=UDP localport=47801 profile=any"
 ; 立即启动 GUI 客户端。
 Filename: "{app}\labctl-student-ui.exe"; Components: student; \
   Flags: nowait postinstall skipifsilent; Description: "启动学生端客户端"
 
 [UninstallRun]
-; 卸载前先结束 GUI 客户端并移除服务。
+; 卸载前先结束 GUI 客户端、移除防火墙规则并移除服务。
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LabCtl Agent (TCP 47800)"""; \
+  Components: student; Flags: runhidden; RunOnceId: "DelFwTcp"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LabCtl Discovery (UDP 47801)"""; \
+  Components: student; Flags: runhidden; RunOnceId: "DelFwUdp"
 Filename: "{sys}\taskkill.exe"; Parameters: "/f /im labctl-student-ui.exe"; \
   Components: student; Flags: runhidden; RunOnceId: "StopLabCtlUi"
 Filename: "{app}\labctl-student.exe"; Parameters: "uninstall"; Components: student; \

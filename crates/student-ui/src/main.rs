@@ -130,7 +130,7 @@ fn wire_toggle_uwf(ui: &MainWindow) {
                 ),
                 Ok(Report::Error { message, .. }) => format!("失败：{message}"),
                 Ok(_) => "已提交".to_string(),
-                Err(e) => format!("无法连接本机服务：{e}"),
+                Err(_) => "无法连接本机管理服务（labctl-student）。请确认该服务已安装并正在运行。".to_string(),
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = back.upgrade() {
@@ -199,8 +199,8 @@ fn refresh(ui: &MainWindow) {
     apply_policy_display(ui, &p);
 
     let back = ui.as_weak();
-    std::thread::spawn(move || {
-        if let Ok(Report::Status(st)) = ipc::send(Command::QueryStatus) {
+    std::thread::spawn(move || match ipc::send(Command::QueryStatus) {
+        Ok(Report::Status(st)) => {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = back.upgrade() {
                     if let Some(on) = st.uwf_enabled {
@@ -211,6 +211,15 @@ fn refresh(ui: &MainWindow) {
                         ui.set_hostname(st.hostname.into());
                     }
                     ui.set_rev_text(format!("策略 rev {}", st.policy_revision).into());
+                }
+            });
+        }
+        _ => {
+            // Agent unreachable — surface it so the UWF card isn't misleading.
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = back.upgrade() {
+                    ui.set_uwf_text("服务未运行".into());
+                    ui.set_uwf_on(false);
                 }
             });
         }

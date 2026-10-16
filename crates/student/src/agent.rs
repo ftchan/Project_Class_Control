@@ -43,6 +43,9 @@ impl ShutdownSignal {
 }
 
 pub async fn run(shutdown: ShutdownSignal) -> Result<()> {
+    // Allow the console on the LAN to reach us (best-effort; needs admin).
+    crate::firewall::ensure_rules();
+
     let policy = config::load();
     tracing::info!(revision = policy.revision, "applying startup policy");
     features::apply_policy(&policy);

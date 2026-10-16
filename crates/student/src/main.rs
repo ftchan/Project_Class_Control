@@ -13,6 +13,7 @@
 mod agent;
 mod config;
 mod features;
+mod firewall;
 mod capture;
 mod lock;
 #[cfg(windows)]
@@ -30,6 +31,7 @@ fn main() -> Result<()> {
         "install" => return service::install(),
         #[cfg(windows)]
         "uninstall" => return service::uninstall(),
+        "doctor" => return doctor(),
         "ui" => return lock::run_standalone_gate(),
         "hash" => {
             // `labctl-student hash <passphrase>` prints an Argon2id PHC hash,
@@ -46,7 +48,7 @@ fn main() -> Result<()> {
         "run" => {}
         other => {
             eprintln!("unknown mode: {other}");
-            eprintln!("modes: run | service | install | uninstall | ui");
+            eprintln!("modes: run | service | install | uninstall | ui | doctor | hash");
             std::process::exit(2);
         }
     }
@@ -55,6 +57,40 @@ fn main() -> Result<()> {
     init_tracing();
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(agent::run(agent::ShutdownSignal::ctrl_c()))
+}
+
+/// Quick self-check: is the agent listening locally, and is a policy present?
+/// Run `labctl-student doctor` on a machine where the GUI says "refused".
+fn doctor() -> Result<()> {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let port = labctl_common::DEFAULT_PORT;
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    println!("LabCtl 学生端自检");
+    println!("-------------------");
+
+    match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(_) => println!("[OK] 本机 agent 正在监听 127.0.0.1:{port}（GUI 可连接）"),
+        Err(e) => {
+            println!("[X ] 无法连接 127.0.0.1:{port}：{e}");
+            println!("     => agent 服务没有运行。请以管理员执行：labctl-student install");
+            println!("        或检查服务状态：sc query LabCtlStudent");
+        }
+    }
+
+    let pf = labctl_common::paths::policy_file();
+    if pf.exists() {
+        println!("[OK] 策略文件存在：{}", pf.display());
+    } else {
+        println!("[! ] 未找到策略文件：{}（将使用默认策略）", pf.display());
+    }
+
+    println!();
+    println!("提示：教师机看不到本机时，多为防火墙拦截 TCP {port} / UDP {}。",
+        labctl_common::DISCOVERY_PORT);
+    println!("      agent 启动时会自动添加放行规则（需管理员/服务权限）。");
+    Ok(())
 }
 
 fn init_tracing() {
