@@ -42,17 +42,21 @@ fn apply_wallpaper(lock: bool, path: Option<&str>) -> anyhow::Result<()> {
     let (system, _) =
         hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Policies\System")?;
 
+    // `lock` only decides whether the student may change it; a pushed
+    // wallpaper is applied either way.
     if lock {
         active_desktop.set_value("NoChangingWallPaper", &1u32)?;
         if let Some(p) = path {
             system.set_value("Wallpaper", &p)?;
             system.set_value("WallpaperStyle", &"10")?;
-            set_wallpaper_now(p)?;
         }
     } else {
         let _ = active_desktop.delete_value("NoChangingWallPaper");
         let _ = system.delete_value("Wallpaper");
         let _ = system.delete_value("WallpaperStyle");
+    }
+    if let Some(p) = path.filter(|p| std::path::Path::new(p).exists()) {
+        set_wallpaper_now(p)?;
     }
     Ok(())
 }

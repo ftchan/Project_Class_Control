@@ -92,14 +92,11 @@ async fn pick_wallpaper() -> impl IntoResponse {
     Json(json!({ "path": path })).into_response()
 }
 
-/// If the policy locks the wallpaper and names a path, read that image on the
-/// console machine and embed it as bytes, so every student gets a real local
-/// file instead of a teacher-only path (which would blank their desktop).
+/// If the policy names a wallpaper path (locked or not), read that image on
+/// the console machine and embed it as bytes, so every student gets a real
+/// local file instead of a teacher-only path (which would blank their desktop).
 fn embed_wallpaper(policy: &mut Policy) {
     use base64::Engine as _;
-    if !policy.lock_wallpaper {
-        return;
-    }
     let Some(path) = policy.wallpaper_path.clone() else { return };
     if path.trim().is_empty() {
         return;
