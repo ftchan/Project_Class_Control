@@ -52,7 +52,7 @@ pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
 
     let _tray_guard = start_tray(ui.as_weak());
     let refresh_timer = refresh_timer(ui.as_weak());
-    let policy_timer = policy_watch_timer();
+    let policy_timer = policy_watch_timer(ui.as_weak(), gate.clone());
     spawn_control_listener(ui.as_weak());
 
     if show_on_start {
@@ -227,16 +227,34 @@ fn refresh_timer(ui_w: Weak<MainWindow>) -> Timer {
 
 /// Enforce per-user policy on revision change regardless of lock state, so it
 /// takes effect while the client sits hidden in the tray.
-fn policy_watch_timer() -> Timer {
+fn policy_watch_timer(ui_w: Weak<MainWindow>, gate: Rc<RefCell<store::Gate>>) -> Timer {
     let t = Timer::default();
-    t.start(TimerMode::Repeated, Duration::from_secs(3), || {
+    t.start(TimerMode::Repeated, Duration::from_secs(3), move || {
         let p = store::load_policy();
         if LAST_APPLIED_REV.load(Ordering::Relaxed) != p.revision {
             userpolicy::apply(&p);
             LAST_APPLIED_REV.store(p.revision, Ordering::Relaxed);
+            refresh_gate(&ui_w, &gate, &p);
         }
     });
     t
+}
+
+/// Pick up an access passphrase pushed by the teacher. When it changed, lock
+/// again so the new one is required right away, not after a restart.
+fn refresh_gate(ui_w: &Weak<MainWindow>, gate: &Rc<RefCell<store::Gate>>, p: &Policy) {
+    let fresh = store::load_gate(p);
+    let changed = fresh.hash != gate.borrow().hash;
+    let teacher_managed = fresh.teacher_managed;
+    *gate.borrow_mut() = fresh;
+    let Some(ui) = ui_w.upgrade() else { return };
+    ui.set_first_run(gate.borrow().first_run());
+    if changed {
+        ui.set_locked(true);
+        ui.set_pw("".into());
+        ui.set_pw2("".into());
+        ui.set_message(if teacher_managed { "访问密码已由教师端更新" } else { "" }.into());
+    }
 }
 
 // ---------------- tray (Windows) ----------------

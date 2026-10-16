@@ -126,12 +126,31 @@ impl Default for Policy {
 
 impl Policy {
     /// Merge an incoming policy over this one, taking the new one's fields and
-    /// adopting its revision only if it is strictly newer.
-    pub fn apply(&mut self, incoming: Policy) -> bool {
+    /// adopting its revision only if it is strictly newer. A push without an
+    /// access passphrase keeps the current one (the console leaves the field
+    /// empty to mean "unchanged").
+    pub fn apply(&mut self, mut incoming: Policy) -> bool {
         if incoming.revision < self.revision {
             return false;
         }
+        if incoming.config_passphrase_hash.is_none() {
+            incoming.config_passphrase_hash = self.config_passphrase_hash.take();
+        }
         *self = incoming;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Policy;
+
+    #[test]
+    fn empty_passphrase_keeps_current() {
+        let mut p = Policy { config_passphrase_hash: Some("old".into()), revision: 1, ..Policy::default() };
+        assert!(p.apply(Policy { revision: 2, ..Policy::default() }));
+        assert_eq!(p.config_passphrase_hash.as_deref(), Some("old"));
+        assert!(p.apply(Policy { config_passphrase_hash: Some("new".into()), revision: 3, ..Policy::default() }));
+        assert_eq!(p.config_passphrase_hash.as_deref(), Some("new"));
     }
 }
