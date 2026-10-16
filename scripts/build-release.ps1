@@ -5,7 +5,7 @@
 .DESCRIPTION
   前置：安装 Rust (https://rustup.rs) 与 “Desktop development with C++”(MSVC 构建工具)。
   运行后产出：
-    dist\LabCtl\labctl-teacher.exe      教师端控制台（双击运行，浏览器打开 127.0.0.1:8080）
+    dist\LabCtl\labctl-teacher.exe      教师端控制台（双击运行，自动打开浏览器控制台）
     dist\LabCtl\labctl-student.exe      学生端（受管客户端）
     dist\LabCtl\scripts\*               一键部署/卸载脚本
     dist\LabCtl\README.md

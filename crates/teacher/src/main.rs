@@ -15,17 +15,14 @@ use std::net::SocketAddr;
 async fn main() -> Result<()> {
     init_tracing();
 
-    let bind: SocketAddr = std::env::var("LABCTL_CONSOLE_BIND")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 8080)));
+    let listener = bind_console().await?;
+    let bind = listener.local_addr()?;
 
     let engine = engine::Engine::new();
     tokio::spawn(engine.clone().run_poller());
 
     let app = api::router(engine).layer(tower_http::trace::TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!(%bind, "console UI at http://{bind}");
     println!("Lab console running. Open http://{bind} in your browser.");
 
@@ -42,11 +39,45 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Bind the console listener. An explicit `LABCTL_CONSOLE_BIND` is used as-is.
+/// Otherwise try 8080, then fall back: Windows often reserves ranges around
+/// 8080 for Hyper-V/WSL (bind fails with os error 10013), and those ranges
+/// change on every boot.
+async fn bind_console() -> Result<tokio::net::TcpListener> {
+    if let Some(addr) = std::env::var("LABCTL_CONSOLE_BIND")
+        .ok()
+        .and_then(|s| s.parse::<SocketAddr>().ok())
+    {
+        return tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("cannot listen on {addr}: {e}"));
+    }
+
+    // Port 0 last: the OS picks a free port outside the reserved ranges.
+    for port in [8080, 18080, 28080, 0] {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(e) => tracing::warn!(%addr, error = %e, "console port unavailable, trying next"),
+        }
+    }
+    anyhow::bail!("no local port available for the console")
+}
+
 /// Best-effort: open `url` in the operator's default browser.
 fn open_in_browser(url: &str) {
-    let result = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn()
-    } else if cfg!(target_os = "macos") {
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // No extra console window flashing up for the `start` helper.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+    };
+    #[cfg(not(windows))]
+    let result = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).spawn()
     } else {
         std::process::Command::new("xdg-open").arg(url).spawn()
