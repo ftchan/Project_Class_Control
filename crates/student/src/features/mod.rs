@@ -4,6 +4,7 @@
 
 pub mod usb;
 pub mod uwf;
+pub mod wallpaper;
 
 use anyhow::Result;
 use labctl_common::policy::Policy;
@@ -14,9 +15,13 @@ use labctl_common::policy::Policy;
 /// the background; their progress is reported by [`uwf_state`].
 pub fn apply_policy(policy: &Policy) -> Vec<String> {
     let mut errors = Vec::new();
-    // Wallpaper is a per-user setting applied by the GUI client in the
-    // interactive session (the service runs in session 0, where HKCU is the
-    // system account and has no effect on the student's desktop).
+    // Setting the wallpaper itself is per-user and done by the GUI in the
+    // interactive session (the service's HKCU is the system account's); the
+    // lock is machine-wide policy, which only the service can write.
+    if let Err(e) = wallpaper::apply(policy.lock_wallpaper, policy.wallpaper_path.as_deref()) {
+        tracing::error!(error = %e, "wallpaper lock failed");
+        errors.push(format!("壁纸锁定失败：{e}"));
+    }
     if let Err(e) = usb::apply(policy.usb_storage) {
         tracing::error!(error = %e, "usb storage policy failed");
         errors.push(format!("U 盘策略失败：{e}"));
