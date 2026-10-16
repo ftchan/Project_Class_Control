@@ -129,11 +129,26 @@ pub fn install() -> Result<()> {
 }
 
 pub fn uninstall() -> Result<()> {
+    const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    let service = manager.open_service(
+    let service = match manager.open_service(
         SERVICE_NAME,
         ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
-    )?;
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // Not installed is not an error — makes a pre-clean before install
+            // idempotent (and avoids writing to stderr / non-zero exit).
+            if matches!(&e, windows_service::Error::Winapi(io)
+                if io.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST))
+            {
+                println!("Service '{SERVICE_NAME}' is not installed; nothing to remove.");
+                return Ok(());
+            }
+            return Err(e.into());
+        }
+    };
 
     let status = service.query_status()?;
     if status.current_state != ServiceState::Stopped {

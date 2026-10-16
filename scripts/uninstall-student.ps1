@@ -22,7 +22,8 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 $exe = Join-Path $InstallDir "labctl-student.exe"
 if (Test-Path $exe) {
   Write-Host "stop and remove the service ..." -ForegroundColor Cyan
-  & $exe uninstall 2>$null | Out-Null
+  try { & $exe uninstall 2>&1 | Out-Null } catch { }
+  $global:LASTEXITCODE = 0
 } else {
   sc.exe stop LabCtlStudent 2>$null | Out-Null
   sc.exe delete LabCtlStudent 2>$null | Out-Null

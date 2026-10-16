@@ -90,8 +90,9 @@ $policy = [ordered]@{
 }
 
 if ($Passphrase) {
-  $hash = & $targetExe hash $Passphrase
-  $policy.config_passphrase_hash = $hash.Trim()
+  $hash = (& $targetExe hash $Passphrase 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) { throw "hashing passphrase failed: $hash" }
+  $policy.config_passphrase_hash = $hash
 }
 
 $policyPath = Join-Path $dataDir "policy.json"
@@ -114,9 +115,14 @@ if ($Uwf -eq "on") {
 
 # --- 4. register and start the service ---
 Write-Host "[4/5] register and start the Windows service ..." -ForegroundColor Cyan
-& $targetExe uninstall 2>$null | Out-Null
-& $targetExe install
-if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE)." }
+# Pre-clean any previous install; ignore output/errors (merge stderr so a
+# native stderr write can't abort the script under ErrorActionPreference=Stop).
+try { & $targetExe uninstall 2>&1 | Out-Null } catch { }
+$global:LASTEXITCODE = 0
+
+$installOut = & $targetExe install 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE): $installOut" }
+Write-Host ("      " + $installOut.Trim())
 
 # --- 5. GUI autostart + firewall ---
 Write-Host "[5/5] configure autostart and firewall ..." -ForegroundColor Cyan
