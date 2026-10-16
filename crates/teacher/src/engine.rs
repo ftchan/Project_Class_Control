@@ -230,4 +230,20 @@ impl Engine {
         self.exchange(Self::addr_of(&rec)?, Command::RebootAndRestore { restore, delay_secs: delay })
             .await
     }
+
+    /// Broadcast the one-click "restore desktop defaults" to every client.
+    pub async fn apply_defaults_all(&self, wallpaper: Option<String>) -> Vec<(Uuid, Result<Report>)> {
+        let mut out = Vec::new();
+        for rec in self.roster().await {
+            let r = match Self::addr_of(&rec) {
+                Ok(addr) => {
+                    self.exchange(addr, Command::ApplyDefaults { wallpaper_path: wallpaper.clone() })
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            out.push((rec.machine_id, r));
+        }
+        out
+    }
 }

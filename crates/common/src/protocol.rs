@@ -52,6 +52,11 @@ pub enum Command {
     /// next boot, to be honored by whatever restore mechanism is deployed
     /// (e.g. UWF discard, or a disk-restore agent).
     RebootAndRestore { restore: bool, delay_secs: u32 },
+
+    /// One-click "restore desktop defaults" for the signed-in user: default
+    /// mouse-cursor scheme, default desktop icon size, and (if a path is given
+    /// and exists) a default wallpaper. Applied by the GUI in the user session.
+    ApplyDefaults { wallpaper_path: Option<String> },
 }
 
 /// Replies and unsolicited reports a client sends to the console.

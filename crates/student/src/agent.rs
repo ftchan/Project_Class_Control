@@ -113,6 +113,14 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
                 Err(e) => Report::Error { command: "request_thumbnail".into(), message: e.to_string() },
             }
         }
+        Command::ApplyDefaults { wallpaper_path } => {
+            // Per-user settings are applied by the GUI in the interactive
+            // session; forward the request over the loopback control port.
+            match forward_defaults_to_ui(wallpaper_path.as_deref()) {
+                Ok(()) => Report::Ack { command: "apply_defaults".into(), note: Some("已下发到客户端".into()) },
+                Err(e) => Report::Error { command: "apply_defaults".into(), message: e.to_string() },
+            }
+        }
         Command::RebootAndRestore { restore, delay_secs } => {
             tracing::warn!(?peer, restore, "reboot requested by console");
             match features::reboot_and_restore(restore, delay_secs.clamp(0, 600)) {
@@ -203,6 +211,36 @@ fn launch_ui() -> Result<()> {
     });
     std::process::Command::new(ui_exe).arg("--show").spawn()?;
     Ok(())
+}
+
+/// Send the "restore defaults" request to the GUI client's control port.
+/// If the GUI isn't running, try to launch it first, then deliver.
+fn forward_defaults_to_ui(wallpaper: Option<&str>) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let msg = match wallpaper {
+        Some(p) if !p.is_empty() => format!("defaults\t{p}"),
+        _ => "defaults".to_string(),
+    };
+
+    let deliver = || -> anyhow::Result<()> {
+        let mut s = TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, labctl_common::UI_CONTROL_PORT).into(),
+            Duration::from_millis(500),
+        )?;
+        s.write_all(msg.as_bytes())?;
+        Ok(())
+    };
+
+    if deliver().is_ok() {
+        return Ok(());
+    }
+    // GUI not up — try to start it, give it a moment, then retry once.
+    let _ = launch_ui();
+    std::thread::sleep(Duration::from_millis(1500));
+    deliver()
 }
 
 fn load_or_create_machine_id() -> Uuid {

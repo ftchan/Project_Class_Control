@@ -81,5 +81,89 @@ fn set_wallpaper_now(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One-click "restore desktop defaults" for the signed-in user:
+///   * default mouse-cursor scheme,
+///   * default desktop icon size (48 px, "medium"),
+///   * default wallpaper (only if `wallpaper` is given and the file exists).
+/// Explorer is refreshed at the end so the icon size takes effect immediately.
+#[cfg(windows)]
+pub fn apply_defaults(wallpaper: Option<&str>) {
+    if let Err(e) = reset_cursors() {
+        tracing::warn!(error = %e, "reset cursors failed");
+    }
+    if let Err(e) = reset_icon_size() {
+        tracing::warn!(error = %e, "reset icon size failed");
+    }
+    if let Some(p) = wallpaper {
+        if std::path::Path::new(p).exists() {
+            if let Err(e) = set_wallpaper_now(p) {
+                tracing::warn!(error = %e, "set default wallpaper failed");
+            }
+        } else {
+            tracing::info!(path = p, "default wallpaper path missing; skipping");
+        }
+    }
+    refresh_explorer();
+}
+
+#[cfg(windows)]
+fn reset_cursors() -> anyhow::Result<()> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (cursors, _) = hkcu.create_subkey(r"Control Panel\Cursors")?;
+    // Selecting the empty "(no scheme)" / Windows default: clear each pointer
+    // so Windows falls back to its built-in default cursors.
+    for name in [
+        "AppStarting", "Arrow", "Crosshair", "Hand", "Help", "IBeam", "No", "NWPen",
+        "SizeAll", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "Wait",
+    ] {
+        let _ = cursors.set_value(name, &"");
+    }
+    cursors.set_value("", &"Windows Default")?; // scheme (Default) value
+    apply_cursor_change()
+}
+
+#[cfg(windows)]
+fn apply_cursor_change() -> anyhow::Result<()> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SystemParametersInfoW(a: u32, b: u32, c: *mut core::ffi::c_void, d: u32) -> i32;
+    }
+    const SPI_SETCURSORS: u32 = 0x0057;
+    const SPIF_UPDATEINIFILE: u32 = 0x01;
+    const SPIF_SENDCHANGE: u32 = 0x02;
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE)
+    };
+    anyhow::ensure!(ok != 0, "SPI_SETCURSORS failed");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn reset_icon_size() -> anyhow::Result<()> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    // Desktop icon size lives in the desktop view's "bag". 48 = medium (the
+    // Windows default). Explorer refresh (below) makes it take effect.
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (desktop, _) =
+        hkcu.create_subkey(r"Software\Microsoft\Windows\Shell\Bags\1\Desktop")?;
+    desktop.set_value("IconSize", &48u32)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn refresh_explorer() {
+    // Restart the shell so cursor/wallpaper/icon-size changes show at once.
+    // This restarts the taskbar/desktop only; the user's open apps keep running.
+    use std::process::Command;
+    let _ = Command::new("taskkill").args(["/f", "/im", "explorer.exe"]).output();
+    let _ = Command::new("cmd").args(["/C", "start", "", "explorer.exe"]).spawn();
+}
+
 #[cfg(not(windows))]
 pub fn apply(_p: &Policy) {}
+
+#[cfg(not(windows))]
+pub fn apply_defaults(_wallpaper: Option<&str>) {}

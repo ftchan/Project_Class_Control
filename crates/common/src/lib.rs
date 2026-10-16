@@ -17,5 +17,9 @@ pub const DEFAULT_PORT: u16 = 47800;
 /// Default UDP port used for LAN discovery beacons.
 pub const DISCOVERY_PORT: u16 = 47801;
 
+/// Loopback TCP port the GUI client listens on for local control messages
+/// (single-instance "show", and "defaults" from the agent).
+pub const UI_CONTROL_PORT: u16 = 47802;
+
 /// Magic string prefixed to discovery beacons so we ignore unrelated traffic.
 pub const DISCOVERY_MAGIC: &str = "LABCTL/1";

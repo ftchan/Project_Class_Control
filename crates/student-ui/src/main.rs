@@ -331,11 +331,24 @@ fn show_and_lock(ui_w: &Weak<MainWindow>) {
 }
 
 fn spawn_control_listener(ui_w: Weak<MainWindow>) {
+    use std::io::Read;
     match std::net::TcpListener::bind(("127.0.0.1", store::UI_CONTROL_PORT)) {
         Ok(listener) => {
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
-                    if stream.is_ok() {
+                    let Ok(mut s) = stream else { continue };
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(500)));
+                    let mut buf = String::new();
+                    let _ = s.read_to_string(&mut buf);
+                    let msg = buf.trim().to_string();
+
+                    if let Some(rest) = msg.strip_prefix("defaults") {
+                        // "defaults" or "defaults\t<wallpaper-path>"
+                        let path = rest.trim().trim_start_matches('\t').trim();
+                        let path = (!path.is_empty()).then(|| path.to_string());
+                        std::thread::spawn(move || userpolicy::apply_defaults(path.as_deref()));
+                    } else {
+                        // "show" (single-instance wake)
                         let w = ui_w.clone();
                         let _ = slint::invoke_from_event_loop(move || show_and_lock(&w));
                     }

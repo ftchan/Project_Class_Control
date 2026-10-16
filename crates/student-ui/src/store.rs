@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// Control port used to detect/wake an already-running instance.
-pub const UI_CONTROL_PORT: u16 = 47802;
+pub use labctl_common::UI_CONTROL_PORT;
 
 fn ui_pass_file() -> PathBuf {
     labctl_common::paths::data_dir().join("ui-pass.hash")
@@ -51,13 +51,18 @@ pub fn set_local_password(pw: &str) -> Result<String> {
     Ok(h)
 }
 
-/// Read the locally-persisted policy (for display and for UWF toggles).
+/// Read the locally-persisted policy (for display). Mirrors the agent's
+/// baseline (USB denied) when no policy file exists yet.
 pub fn load_policy() -> Policy {
+    use labctl_common::policy::UsbStoragePolicy;
     let path = labctl_common::paths::policy_file();
     fs::read(&path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+        .unwrap_or(Policy {
+            usb_storage: UsbStoragePolicy::Deny,
+            ..Policy::default()
+        })
 }
 
 /// If another instance is already running, poke it to show and return true.

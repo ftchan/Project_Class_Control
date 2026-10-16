@@ -1,20 +1,30 @@
 //! Load and persist the local policy file.
 
 use anyhow::{Context, Result};
-use labctl_common::policy::Policy;
+use labctl_common::policy::{Policy, UsbStoragePolicy};
 use std::fs;
 use std::path::PathBuf;
+
+/// Safe lab baseline used when no policy has been deployed yet: USB mass
+/// storage is denied (no insertion / read / write). An administrator can
+/// loosen this from the teacher console at any time.
+pub fn default_policy() -> Policy {
+    Policy {
+        usb_storage: UsbStoragePolicy::Deny,
+        ..Policy::default()
+    }
+}
 
 pub fn load() -> Policy {
     let path = labctl_common::paths::policy_file();
     match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            tracing::warn!(?path, error = %e, "policy file unreadable; using defaults");
-            Policy::default()
+            tracing::warn!(?path, error = %e, "policy file unreadable; using baseline");
+            default_policy()
         }),
         Err(_) => {
-            tracing::info!("no policy file; using defaults");
-            Policy::default()
+            tracing::info!("no policy file; using baseline (USB denied)");
+            default_policy()
         }
     }
 }

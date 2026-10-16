@@ -24,6 +24,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/api/hash", post(hash))
         .route("/api/pick-wallpaper", post(pick_wallpaper))
         .route("/api/settings", get(get_settings).post(save_settings))
+        .route("/api/apply-defaults", post(apply_defaults))
         .route("/api/policy", post(policy_all))
         .route("/api/clients/:id/policy", post(policy_one))
         .route("/api/clients/:id/launch", post(launch))
@@ -107,6 +108,25 @@ async fn policy_one(
     Json(policy): Json<Policy>,
 ) -> impl IntoResponse {
     reply(engine.push_policy(id, policy).await)
+}
+
+#[derive(Deserialize)]
+struct DefaultsReq {
+    #[serde(default)]
+    wallpaper_path: Option<String>,
+}
+
+async fn apply_defaults(
+    State(engine): State<Arc<Engine>>,
+    Json(req): Json<DefaultsReq>,
+) -> impl IntoResponse {
+    let wp = req.wallpaper_path.filter(|s| !s.trim().is_empty());
+    let results = engine.apply_defaults_all(wp).await;
+    let body: Vec<_> = results
+        .into_iter()
+        .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))
+        .collect();
+    Json(json!({ "results": body })).into_response()
 }
 
 async fn launch(State(engine): State<Arc<Engine>>, Path(id): Path<Uuid>) -> impl IntoResponse {

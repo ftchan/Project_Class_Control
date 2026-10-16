@@ -31,6 +31,7 @@
         <span class="stat stat-offline"><b id="stat-offline">0</b> 离线</span>
       </div>
       <div class="toolbar-actions">
+        <button class="btn btn-outline" id="btn-defaults-all">一键恢复默认</button>
         <button class="btn btn-outline" id="btn-launch-all">唤起客户端</button>
         <button class="btn btn-danger" id="btn-reboot-all">重启并还原</button>
       </div>
@@ -97,7 +98,17 @@
         <input type="password" id="p-pass" placeholder="输入新口令" />
       </label>
 
+      <label class="field">
+        <span>一键恢复默认：默认壁纸<small class="muted">用于"一键恢复默认"；留空则不改壁纸</small></span>
+        <div class="input-row">
+          <input type="text" id="p-default-wallpaper" placeholder="C:\\LabCtl\\default.jpg" />
+          <button type="button" class="btn btn-outline" id="p-default-wallpaper-pick">选择…</button>
+        </div>
+      </label>
+
       <div class="drawer-note muted">
+        "一键恢复默认" 会把全部终端的<b>鼠标样式、桌面图标大小</b>恢复为系统默认，
+        并（若上面设置了默认壁纸）统一设置壁纸。<br />
         策略通过局域网下发到选中/全部终端。<br />
         UWF 首次开启需<b>重启一次激活</b>；激活后<b>每次重启都会还原</b>所选磁盘。
         测试方法：开启→重启激活→再新建文件→再重启，文件应消失。
