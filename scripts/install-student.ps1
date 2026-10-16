@@ -1,15 +1,15 @@
-<#
+﻿<#
 .SYNOPSIS
-  一键部署 LabCtl 学生端（受管客户端）。需以管理员身份运行。
-
+  一键部署 LabCtl 学生端（单文件）。需以管理员身份运行。
   仅用于学校内网、管理员已授权的本机房自有设备。
 
 .DESCRIPTION
-  执行以下步骤：
-    1. 将 labctl-student.exe 复制到安装目录（默认 C:\Program Files\LabCtl）
+  单个 labctl-student.exe 同时提供后台服务与托盘界面：
+    1. 复制 labctl-student.exe 到安装目录（默认 C:\Program Files\LabCtl）
     2. 写入初始策略 C:\ProgramData\LabCtl\policy.json（按参数）
     3. （可选）安装 UWF 可选功能 Client-UnifiedWriteFilter（专业版即可）
     4. 注册并启动 Windows 服务（含失败自动重启）
+    5. 把界面（exe ui）加入开机自启，并放行防火墙
 
 .PARAMETER ExePath
   源 labctl-student.exe 的路径。默认取脚本同目录下的该文件。
@@ -24,17 +24,16 @@
   强制使用的壁纸绝对路径（可选）。
 
 .PARAMETER Usb
-  U 盘策略：allow | readonly | deny（默认 allow）。
+  U 盘策略：allow | readonly | deny（默认 deny）。
 
 .PARAMETER Uwf
   UWF 期望状态：on | off | unmanaged（默认 unmanaged）。on 会先安装可选功能。
 
 .PARAMETER Passphrase
-  客户端访问口令（可选）。脚本用 `labctl-student hash` 计算哈希后写入策略。
+  客户端访问口令（可选）。
 
 .EXAMPLE
-  # 最常见：锁壁纸 + U盘只读 + 开 UWF + 设口令
-  .\install-student.ps1 -LockWallpaper -Usb readonly -Uwf on -Passphrase "lab-2016"
+  .\install-student.ps1 -Usb deny -Uwf on -Passphrase "lab-2016"
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +41,7 @@ param(
   [string]$InstallDir = "C:\Program Files\LabCtl",
   [switch]$LockWallpaper,
   [string]$WallpaperPath,
-  [ValidateSet("allow","readonly","deny")] [string]$Usb = "allow",
+  [ValidateSet("allow","readonly","deny")] [string]$Usb = "deny",
   [ValidateSet("on","off","unmanaged")]    [string]$Uwf = "unmanaged",
   [string]$Passphrase
 )
@@ -53,41 +52,27 @@ function Assert-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   $p  = New-Object Security.Principal.WindowsPrincipal($id)
   if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw "请以管理员身份运行此脚本。"
+    throw "please run this script as Administrator."
   }
 }
 
 Assert-Admin
 
-# --- 1. 定位并复制可执行文件 ---
+# --- 1. locate and copy the executable ---
 if (-not $ExePath) {
   $ExePath = Join-Path $PSScriptRoot "labctl-student.exe"
 }
 if (-not (Test-Path $ExePath)) {
-  throw "找不到 labctl-student.exe：$ExePath （用 -ExePath 指定，或放到脚本同目录）"
+  throw "labctl-student.exe not found: $ExePath (use -ExePath, or put it next to this script)"
 }
 
-Write-Host "[1/4] 安装到 $InstallDir ..." -ForegroundColor Cyan
+Write-Host "[1/5] install to $InstallDir ..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $targetExe = Join-Path $InstallDir "labctl-student.exe"
 Copy-Item -Path $ExePath -Destination $targetExe -Force
 
-# GUI 客户端（可视化托盘程序）——若与学生端 exe 同目录则一并安装并设开机自启。
-$uiSrc = Join-Path (Split-Path $ExePath -Parent) "labctl-student-ui.exe"
-$uiExe = Join-Path $InstallDir "labctl-student-ui.exe"
-if (Test-Path $uiSrc) {
-  Copy-Item -Path $uiSrc -Destination $uiExe -Force
-  # 开机自启（HKLM Run：对本机所有登录用户生效）
-  $runKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
-  New-Item -Path $runKey -Force | Out-Null
-  Set-ItemProperty -Path $runKey -Name "LabCtlStudentUI" -Value "`"$uiExe`""
-  Write-Host "      已安装 GUI 客户端并设为开机自启。"
-} else {
-  Write-Host "      （未找到 labctl-student-ui.exe，跳过 GUI 客户端安装）" -ForegroundColor DarkGray
-}
-
-# --- 2. 写入初始策略 ---
-Write-Host "[2/4] 写入初始策略 ..." -ForegroundColor Cyan
+# --- 2. write the initial policy ---
+Write-Host "[2/5] write initial policy ..." -ForegroundColor Cyan
 $dataDir = Join-Path $env:ProgramData "LabCtl"
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
@@ -105,60 +90,57 @@ $policy = [ordered]@{
 }
 
 if ($Passphrase) {
-  Write-Host "      计算访问口令哈希 ..." -ForegroundColor DarkGray
   $hash = & $targetExe hash $Passphrase
   $policy.config_passphrase_hash = $hash.Trim()
 }
 
 $policyPath = Join-Path $dataDir "policy.json"
 ($policy | ConvertTo-Json -Depth 4) | Set-Content -Path $policyPath -Encoding UTF8
-Write-Host "      已写入 $policyPath"
+Write-Host "      wrote $policyPath"
 
-# --- 3. UWF 可选功能（仅在需要开启时）---
+# --- 3. UWF optional feature (only when enabling) ---
 if ($Uwf -eq "on") {
-  Write-Host "[3/4] 确保 UWF 功能已安装（Client-UnifiedWriteFilter）..." -ForegroundColor Cyan
+  Write-Host "[3/5] ensure UWF feature (Client-UnifiedWriteFilter) ..." -ForegroundColor Cyan
   $feat = Get-WindowsOptionalFeature -Online -FeatureName Client-UnifiedWriteFilter -ErrorAction SilentlyContinue
   if ($feat -and $feat.State -ne "Enabled") {
     dism.exe /Online /Enable-Feature /FeatureName:Client-UnifiedWriteFilter /All /NoRestart | Out-Null
-    Write-Host "      已安装 UWF 功能（需重启后 UWF 方可启用）。" -ForegroundColor Yellow
+    Write-Host "      UWF feature installed (reboot required to enable)." -ForegroundColor Yellow
   } else {
-    Write-Host "      UWF 功能已就绪。"
+    Write-Host "      UWF feature ready."
   }
 } else {
-  Write-Host "[3/4] 跳过 UWF 功能安装（-Uwf $Uwf）。" -ForegroundColor DarkGray
+  Write-Host "[3/5] skip UWF feature (-Uwf $Uwf)." -ForegroundColor DarkGray
 }
 
-# --- 4. 注册并启动服务 ---
-Write-Host "[4/4] 注册并启动 Windows 服务 ..." -ForegroundColor Cyan
-# 若已存在旧服务，先卸载再装，保证干净。
+# --- 4. register and start the service ---
+Write-Host "[4/5] register and start the Windows service ..." -ForegroundColor Cyan
 & $targetExe uninstall 2>$null | Out-Null
 & $targetExe install
-if ($LASTEXITCODE -ne 0) { throw "服务安装失败（exit $LASTEXITCODE）。" }
+if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE)." }
 
-# 启动 GUI 客户端（best-effort；下次登录会自动启动）
-if (Test-Path $uiExe) {
-  Start-Process -FilePath $uiExe -ErrorAction SilentlyContinue
-}
+# --- 5. GUI autostart + firewall ---
+Write-Host "[5/5] configure autostart and firewall ..." -ForegroundColor Cyan
+$runKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+New-Item -Path $runKey -Force | Out-Null
+Set-ItemProperty -Path $runKey -Name "LabCtlStudentUI" -Value "`"$targetExe`" ui"
 
-# --- 防火墙：放行教师端访问（LAN 入站 TCP 47800 / UDP 47801）---
-Write-Host "配置防火墙放行规则 ..." -ForegroundColor Cyan
 netsh advfirewall firewall delete rule name="LabCtl Agent (TCP 47800)"      2>$null | Out-Null
 netsh advfirewall firewall delete rule name="LabCtl Discovery (UDP 47801)"  2>$null | Out-Null
 netsh advfirewall firewall add rule name="LabCtl Agent (TCP 47800)"     dir=in action=allow protocol=TCP localport=47800 profile=any | Out-Null
 netsh advfirewall firewall add rule name="LabCtl Discovery (UDP 47801)" dir=in action=allow protocol=UDP localport=47801 profile=any | Out-Null
 
-# --- 校验服务是否真的在运行 ---
+# launch the GUI now (hidden in tray)
+Start-Process -FilePath $targetExe -ArgumentList "ui" -ErrorAction SilentlyContinue
+
 Start-Sleep -Seconds 2
 $svc = Get-Service -Name LabCtlStudent -ErrorAction SilentlyContinue
 if (-not $svc -or $svc.Status -ne 'Running') {
-  Write-Host "⚠ 服务未处于运行状态（当前：$($svc.Status)）。请运行 '$targetExe doctor' 排查。" -ForegroundColor Yellow
+  Write-Host "WARN: service not Running (current: $($svc.Status)). Run '$targetExe doctor' to diagnose." -ForegroundColor Yellow
 }
 
 Write-Host ""
-Write-Host "✔ 部署完成。" -ForegroundColor Green
-Write-Host "  可执行文件 : $targetExe"
-Write-Host "  服务状态   : $((Get-Service LabCtlStudent -ErrorAction SilentlyContinue).Status)"
-if (Test-Path $uiExe) { Write-Host "  GUI 客户端 : $uiExe（托盘常驻，开机自启）" }
-Write-Host "  策略文件   : $policyPath"
-Write-Host "  服务名     : LabCtlStudent（services.msc 可见，可正常停止/卸载）"
-if ($Uwf -eq "on") { Write-Host "  提示       : UWF 需重启后生效。" -ForegroundColor Yellow }
+Write-Host "OK: deployment complete." -ForegroundColor Green
+Write-Host "  exe     : $targetExe"
+Write-Host "  service : $((Get-Service LabCtlStudent -ErrorAction SilentlyContinue).Status)"
+Write-Host "  policy  : $policyPath"
+if ($Uwf -eq "on") { Write-Host "  note    : UWF takes effect after a reboot." -ForegroundColor Yellow }

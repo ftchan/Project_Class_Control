@@ -214,23 +214,16 @@ fn hostname() -> String {
 }
 
 fn launch_ui() -> Result<()> {
-    // Start the GUI client (labctl-student-ui) if it isn't already running.
+    // Start the GUI (same binary, ui mode) if not already running.
     // It lives next to this agent executable. A second launch simply signals
     // the existing tray instance to show itself, so this is idempotent.
     //
     // Note: when the agent runs as a session-0 service, a plain spawn won't
     // surface in the interactive desktop; the GUI's logon autostart is the
     // primary path, and this is a best-effort nudge.
-    let dir = std::env::current_exe()?
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
-    let ui_exe = dir.join(if cfg!(windows) {
-        "labctl-student-ui.exe"
-    } else {
-        "labctl-student-ui"
-    });
-    std::process::Command::new(ui_exe).arg("--show").spawn()?;
+    // The GUI is the same binary in `ui` mode.
+    let exe = std::env::current_exe()?;
+    std::process::Command::new(exe).args(["ui", "--show"]).spawn()?;
     Ok(())
 }
 
@@ -269,37 +262,65 @@ fn update_client(
         std::fs::create_dir_all(dir)?;
     }
 
-    let new_path = target.with_extension("new");
-    std::fs::write(&new_path, &bytes).map_err(|e| anyhow::anyhow!("write new exe: {e}"))?;
-
-    // Stop any running copy so the file can be replaced.
     let basename = target
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(filename);
+        .unwrap_or(filename)
+        .to_string();
+    let new_path = target.with_file_name(format!("{basename}.new"));
+    std::fs::write(&new_path, &bytes).map_err(|e| anyhow::anyhow!("write new exe: {e}"))?;
+
+    let size = bytes.len();
+
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/f", "/im", basename])
-            .output();
-        std::thread::sleep(std::time::Duration::from_millis(800));
+        // The client is the same binary as the running service, so we can't
+        // replace it from within the process. Spawn a detached helper that
+        // waits for us to send our reply, stops the service, swaps the file,
+        // restarts the service, and relaunches the GUI.
+        let start_ui = if run_after {
+            format!("start \"\" \"{t}\" ui --show\r\n", t = target.display())
+        } else {
+            String::new()
+        };
+        let bat = format!(
+            "@echo off\r\n\
+             ping 127.0.0.1 -n 3 >nul\r\n\
+             sc stop LabCtlStudent >nul 2>&1\r\n\
+             taskkill /f /im \"{base}\" >nul 2>&1\r\n\
+             ping 127.0.0.1 -n 2 >nul\r\n\
+             move /y \"{new}\" \"{target}\" >nul 2>&1\r\n\
+             sc start LabCtlStudent >nul 2>&1\r\n\
+             {start_ui}\
+             del \"%~f0\"\r\n",
+            base = basename,
+            new = new_path.display(),
+            target = target.display(),
+        );
+        let bat_path = std::env::temp_dir().join("labctl-update.bat");
+        std::fs::write(&bat_path, bat).map_err(|e| anyhow::anyhow!("write updater: {e}"))?;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", "/min", &bat_path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("spawn updater: {e}"))?;
+        return Ok(format!("更新已计划（{size} 字节），服务将重启"));
     }
 
-    // Swap: move the old aside (ignored if absent), move new into place.
-    let old_path = target.with_extension("old");
-    let _ = std::fs::remove_file(&old_path);
-    if target.exists() {
-        std::fs::rename(&target, &old_path).map_err(|e| anyhow::anyhow!("archive old exe: {e}"))?;
+    #[cfg(not(windows))]
+    {
+        // Dev/test path: just swap the file in place.
+        let old_path = target.with_file_name(format!("{basename}.old"));
+        let _ = std::fs::remove_file(&old_path);
+        if target.exists() {
+            std::fs::rename(&target, &old_path).ok();
+        }
+        std::fs::rename(&new_path, &target).map_err(|e| anyhow::anyhow!("install new exe: {e}"))?;
+        let _ = std::fs::remove_file(&old_path);
+        if run_after {
+            std::process::Command::new(&target).spawn().ok();
+        }
+        Ok(format!("已更新 {basename}（{size} 字节）"))
     }
-    std::fs::rename(&new_path, &target).map_err(|e| anyhow::anyhow!("install new exe: {e}"))?;
-    let _ = std::fs::remove_file(&old_path);
-
-    if run_after {
-        // Relaunch hidden in the tray (no --show) so the update is seamless.
-        std::process::Command::new(&target).spawn().ok();
-    }
-
-    Ok(format!("已更新 {basename}（{} 字节）", bytes.len()))
 }
 
 /// If the policy carries wallpaper bytes, write them to a local file and set

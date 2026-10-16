@@ -41,19 +41,18 @@ Name: "student"; Description: "学生端受管客户端 labctl-student（注册�
 [Files]
 Source: "{#BinDir}\labctl-teacher.exe";    DestDir: "{app}"; Components: teacher; Flags: ignoreversion
 Source: "{#BinDir}\labctl-student.exe";    DestDir: "{app}"; Components: student; Flags: ignoreversion
-Source: "{#BinDir}\labctl-student-ui.exe"; DestDir: "{app}"; Components: student; Flags: ignoreversion
 Source: "..\README.md";                    DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\教师端控制台"; Filename: "{app}\labctl-teacher.exe"; Components: teacher
-Name: "{group}\学生端客户端"; Filename: "{app}\labctl-student-ui.exe"; Components: student
+Name: "{group}\学生端客户端"; Filename: "{app}\labctl-student.exe"; Parameters: "ui --show"; Components: student
 Name: "{group}\卸载 LabCtl"; Filename: "{uninstallexe}"
 
 [Registry]
-; 学生端 GUI 开机自启（本机所有用户）。
+; 学生端界面开机自启（同一 exe 的 ui 模式；本机所有用户）。
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "LabCtlStudentUI"; \
-  ValueData: """{app}\labctl-student-ui.exe"""; \
+  ValueData: """{app}\labctl-student.exe"" ui"; \
   Components: student; Flags: uninsdeletevalue
 
 [Run]
@@ -65,8 +64,8 @@ Filename: "{sys}\netsh.exe"; Components: student; Flags: runhidden; \
   Parameters: "advfirewall firewall add rule name=""LabCtl Agent (TCP 47800)"" dir=in action=allow protocol=TCP localport=47800 profile=any"
 Filename: "{sys}\netsh.exe"; Components: student; Flags: runhidden; \
   Parameters: "advfirewall firewall add rule name=""LabCtl Discovery (UDP 47801)"" dir=in action=allow protocol=UDP localport=47801 profile=any"
-; 立即启动 GUI 客户端。
-Filename: "{app}\labctl-student-ui.exe"; Components: student; \
+; 立即启动 GUI 客户端（同一 exe 的 ui 模式）。
+Filename: "{app}\labctl-student.exe"; Parameters: "ui"; Components: student; \
   Flags: nowait postinstall skipifsilent; Description: "启动学生端客户端"
 
 [UninstallRun]
@@ -75,7 +74,7 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
   Components: student; Flags: runhidden; RunOnceId: "DelFwTcp"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""LabCtl Discovery (UDP 47801)"""; \
   Components: student; Flags: runhidden; RunOnceId: "DelFwUdp"
-Filename: "{sys}\taskkill.exe"; Parameters: "/f /im labctl-student-ui.exe"; \
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /im labctl-student.exe"; \
   Components: student; Flags: runhidden; RunOnceId: "StopLabCtlUi"
 Filename: "{app}\labctl-student.exe"; Parameters: "uninstall"; Components: student; \
   Flags: runhidden waituntilterminated; RunOnceId: "RemoveLabCtlService"

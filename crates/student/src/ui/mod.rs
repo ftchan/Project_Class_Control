@@ -1,18 +1,9 @@
-//! Student GUI client (slint).
+//! Student GUI client, built into the same binary as the agent.
 //!
-//! A tray-resident, teacher-managed client for the lab machine. It:
-//!   * requires an access password to view/operate (first run sets it);
-//!   * lets the user turn UWF on/off (routed through the local agent, which
-//!     has the privileges);
-//!   * reflects the teacher-pushed policy (polled from the local agent);
-//!   * stays in the tray — closing the window hides it, exiting is gated by
-//!     the password; it auto-starts at logon.
-//!
-//! It is a thin, user-facing front end over the local agent service. All real
-//! enforcement lives in the agent; this UI only requests actions on the same
-//! machine.
-
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//! Launched via `labctl-student ui [--show]`. Tray-resident, teacher-managed:
+//! password gate, read-only status, and per-user policy enforcement (wallpaper,
+//! Task Manager) in the interactive session. Talks to the local agent over
+//! loopback.
 
 mod ipc;
 mod store;
@@ -31,14 +22,7 @@ use std::time::Duration;
 /// Revision of the policy whose per-user parts we last enforced.
 static LAST_APPLIED_REV: AtomicU64 = AtomicU64::new(u64::MAX);
 
-fn main() -> anyhow::Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("LABCTL_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
-
+pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
     // Single instance: if one is already running, wake it and exit.
     if store::signal_existing_instance() {
         return Ok(());
@@ -47,17 +31,11 @@ fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "could not register autostart");
     }
 
-    // `--show` opens the window immediately (teacher launch / manual open).
-    // Without it, the client stays in the tray — no popup at boot/logon.
-    let show_on_start = std::env::args().any(|a| a == "--show");
-
     let ui = MainWindow::new()?;
     ui.set_app_icon(app_icon());
     let policy = store::load_policy();
     let gate = Rc::new(RefCell::new(store::load_gate(&policy)));
 
-    // Enforce per-user policy right away (wallpaper lock, Task Manager lock),
-    // even while the window stays hidden in the tray.
     userpolicy::apply(&policy);
     LAST_APPLIED_REV.store(policy.revision, Ordering::Relaxed);
 
@@ -72,8 +50,6 @@ fn main() -> anyhow::Result<()> {
     wire_unlock(&ui, gate.clone());
     wire_window_buttons(&ui);
 
-    // Tray is Windows-only (the deployment target). On dev platforms it is a
-    // no-op so the window still runs for UI work.
     let _tray_guard = start_tray(ui.as_weak());
     let refresh_timer = refresh_timer(ui.as_weak());
     let policy_timer = policy_watch_timer();
@@ -134,14 +110,10 @@ fn wire_window_buttons(ui: &MainWindow) {
     let hide_w = ui.as_weak();
     ui.on_hide_window(move || hide_and_lock(&hide_w));
 
-    // The in-window exit button is only reachable after unlocking, so a click
-    // here means the user already authenticated this session.
     ui.on_request_exit(move || {
         let _ = slint::quit_event_loop();
     });
 
-    // Closing the window (X button / Alt+F4) never quits — it hides to the
-    // tray and re-locks, so exiting always requires the password again.
     let close_w = ui.as_weak();
     ui.window().on_close_requested(move || {
         hide_and_lock(&close_w);
@@ -211,7 +183,6 @@ fn refresh(ui: &MainWindow) {
             });
         }
         _ => {
-            // Agent unreachable — surface it so the UWF card isn't misleading.
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = back.upgrade() {
                     ui.set_uwf_text("服务未运行".into());
@@ -234,9 +205,8 @@ fn refresh_timer(ui_w: Weak<MainWindow>) -> Timer {
     t
 }
 
-/// Enforce per-user policy (wallpaper, Task Manager) whenever the teacher
-/// pushes a new revision — independent of whether the window is open/unlocked,
-/// so policy takes effect while the client sits hidden in the tray.
+/// Enforce per-user policy on revision change regardless of lock state, so it
+/// takes effect while the client sits hidden in the tray.
 fn policy_watch_timer() -> Timer {
     let t = Timer::default();
     t.start(TimerMode::Repeated, Duration::from_secs(3), || {
@@ -251,8 +221,6 @@ fn policy_watch_timer() -> Timer {
 
 // ---------------- tray (Windows) ----------------
 
-/// On Windows, create the tray icon and a timer that polls its menu events.
-/// Returns a guard that must be kept alive for the tray to persist.
 #[cfg(windows)]
 fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
     use tray_icon::menu::{Menu, MenuItem};
@@ -296,7 +264,6 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
                 }
             }
         }
-        // A click on the tray icon shows the (locked) window.
         while let Ok(ev) = tray_rx.try_recv() {
             if let tray_icon::TrayIconEvent::Click { .. } = ev {
                 show_and_lock(&ui_w);
@@ -330,7 +297,6 @@ fn start_tray(_ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
 
 // ---------------- helpers ----------------
 
-/// Show the window and force the lock gate (clearing any cached password).
 fn show_and_lock(ui_w: &Weak<MainWindow>) {
     if let Some(u) = ui_w.upgrade() {
         u.set_locked(true);
@@ -354,12 +320,10 @@ fn spawn_control_listener(ui_w: Weak<MainWindow>) {
                     let msg = buf.trim().to_string();
 
                     if let Some(rest) = msg.strip_prefix("defaults") {
-                        // "defaults" or "defaults\t<wallpaper-path>"
                         let path = rest.trim().trim_start_matches('\t').trim();
                         let path = (!path.is_empty()).then(|| path.to_string());
                         std::thread::spawn(move || userpolicy::apply_defaults(path.as_deref()));
                     } else {
-                        // "show" (single-instance wake)
                         let w = ui_w.clone();
                         let _ = slint::invoke_from_event_loop(move || show_and_lock(&w));
                     }
@@ -375,4 +339,3 @@ fn hostname() -> String {
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".into())
 }
-

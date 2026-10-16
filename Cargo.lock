@@ -3207,10 +3207,13 @@ dependencies = [
  "labctl-common",
  "serde",
  "serde_json",
+ "slint",
+ "slint-build",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tray-icon",
  "uuid",
  "windows 0.56.0",
  "windows-service",
@@ -3218,24 +3221,6 @@ dependencies = [
  "winresource",
  "wmi",
  "xcap",
-]
-
-[[package]]
-name = "labctl-student-ui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "labctl-common",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "uuid",
- "winreg",
- "winresource",
 ]
 
 [[package]]

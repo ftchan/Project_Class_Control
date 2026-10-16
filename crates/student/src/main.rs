@@ -7,8 +7,19 @@
 //!   labctl-student uninstall     Remove the Windows service (needs admin).
 //!
 //! The agent listens on the LAN for the teacher console, enforces the local
-//! policy, and answers status/thumbnail requests. All of this operates only on
-//! this machine and only on an administrator-deployed policy.
+//! policy, and answers status/thumbnail requests. The same binary also hosts
+//! the student GUI client (`ui` mode). All of this operates only on this
+//! machine and only on an administrator-deployed policy.
+//!
+//! Single binary, dispatched by the first argument:
+//!   run | service | install | uninstall | doctor | hash | ui [--show]
+//!
+//! The executable is built as a GUI-subsystem app (no console window for the
+//! tray UI); console sub-commands attach to the parent terminal so their
+//! output still appears when run from a shell.
+
+// Avoid a console window for the tray GUI; console modes re-attach at runtime.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod agent;
 mod config;
@@ -17,13 +28,32 @@ mod firewall;
 mod network;
 mod capture;
 mod lock;
+mod ui;
 #[cfg(windows)]
 mod service;
 
 use anyhow::Result;
 
+/// Re-attach to the launching terminal's console so stdout/stderr are visible
+/// for console sub-commands (the binary itself is GUI-subsystem on Windows).
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+#[cfg(not(windows))]
+fn attach_parent_console() {}
+
 fn main() -> Result<()> {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "run".into());
+
+    // GUI and service modes have no console; everything else attaches to the
+    // parent terminal so its output is visible.
+    if !matches!(mode.as_str(), "ui" | "service") {
+        attach_parent_console();
+    }
 
     match mode.as_str() {
         #[cfg(windows)]
@@ -33,7 +63,11 @@ fn main() -> Result<()> {
         #[cfg(windows)]
         "uninstall" => return service::uninstall(),
         "doctor" => return doctor(),
-        "ui" => return lock::run_standalone_gate(),
+        "ui" => {
+            init_tracing();
+            let show = std::env::args().any(|a| a == "--show");
+            return ui::run_gui(show);
+        }
         "hash" => {
             // `labctl-student hash <passphrase>` prints an Argon2id PHC hash,
             // so deployment scripts can bake an access passphrase into the

@@ -66,7 +66,7 @@ pub enum Command {
     /// the bytes, stops the running copy, swaps the file, and (if `run_after`)
     /// relaunches it hidden in the tray. Used to roll out a newer GUI client.
     UpdateClient {
-        /// File name to install, e.g. "labctl-student-ui.exe".
+        /// File name to install, e.g. "labctl-student.exe".
         filename: String,
         /// Absolute target path; if `None`, install next to the agent exe.
         target_path: Option<String>,

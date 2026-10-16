@@ -1,4 +1,7 @@
 fn main() {
+    // Compile the embedded GUI (ui mode).
+    slint_build::compile("ui/app.slint").expect("compile slint UI");
+
     // Embed the application icon into the Windows executable.
     #[cfg(windows)]
     {

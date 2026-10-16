@@ -184,7 +184,7 @@ async fn update_client(
         std::path::Path::new(&req.source_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("labctl-student-ui.exe")
+            .unwrap_or("labctl-student.exe")
             .to_string()
     });
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
