@@ -146,7 +146,7 @@ function collectSettings() {
     uwf_scope: $("p-uwf-scope").value,
     disable_task_manager: $("p-taskmgr").checked,
     block_internet: $("p-block-internet").checked,
-    default_wallpaper: $("p-default-wallpaper").value,
+    default_wallpaper: $("d-wallpaper").value,
   };
 }
 
@@ -159,7 +159,7 @@ function applySettings(s) {
   if (s.uwf_scope) $("p-uwf-scope").value = s.uwf_scope;
   if (typeof s.disable_task_manager === "boolean") $("p-taskmgr").checked = s.disable_task_manager;
   if (typeof s.block_internet === "boolean") $("p-block-internet").checked = s.block_internet;
-  if (typeof s.default_wallpaper === "string") $("p-default-wallpaper").value = s.default_wallpaper;
+  if (typeof s.default_wallpaper === "string") $("d-wallpaper").value = s.default_wallpaper;
 }
 
 api.get("/api/settings").then(applySettings).catch(() => {});
@@ -171,12 +171,6 @@ $("p-wallpaper-pick").onclick = async () => {
   } catch { toast("无法打开文件选择框"); }
 };
 
-$("p-default-wallpaper-pick").onclick = async () => {
-  try {
-    const { path } = await api.post("/api/pick-wallpaper");
-    if (path) { $("p-default-wallpaper").value = path; api.post("/api/settings", collectSettings()).catch(() => {}); }
-  } catch { toast("无法打开文件选择框"); }
-};
 
 $("btn-update-client").onclick = async () => {
   let src;
@@ -196,12 +190,32 @@ $("btn-update-client").onclick = async () => {
   } catch { toast("下发失败"); }
 };
 
-$("btn-defaults-all").onclick = async () => {
-  const n = state.clients.size;
-  if (!confirm(`将 ${n} 台终端的鼠标样式、桌面图标大小恢复为默认${$("p-default-wallpaper").value ? "，并统一设置默认壁纸" : ""}？`)) return;
-  const res = await api.post("/api/apply-defaults", { wallpaper_path: $("p-default-wallpaper").value || null });
+// --- One-click restore defaults dialog ---
+const defaultsModal = $("defaults-modal");
+const closeDefaults = () => (defaultsModal.hidden = true);
+$("btn-defaults-all").onclick = () => {
+  $("defaults-count").textContent = state.clients.size;
+  defaultsModal.hidden = false;
+};
+$("defaults-close").onclick = closeDefaults;
+$("defaults-cancel").onclick = closeDefaults;
+defaultsModal.onclick = (e) => { if (e.target === defaultsModal) closeDefaults(); };
+
+$("d-wallpaper-pick").onclick = async () => {
+  try {
+    const { path } = await api.post("/api/pick-wallpaper");
+    if (path) $("d-wallpaper").value = path;
+  } catch { toast("无法打开文件选择框"); }
+};
+
+$("defaults-apply").onclick = async () => {
+  const wallpaper = $("d-wallpaper").value.trim();
+  // Remember the chosen default wallpaper for next time.
+  api.post("/api/settings", collectSettings()).catch(() => {});
+  closeDefaults();
+  const res = await api.post("/api/apply-defaults", { wallpaper_path: wallpaper || null });
   const ok = (res.results || []).filter((r) => r.ok).length;
-  toast(`一键恢复默认：${ok}/${(res.results || []).length} 台已下发`);
+  toast(`一键恢复默认：${ok}/${(res.results || []).length} 台已下发${wallpaper ? "（含默认壁纸）" : ""}`);
 };
 
 $("drawer-apply").onclick = async () => {
