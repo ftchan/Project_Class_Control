@@ -21,6 +21,23 @@ pub fn policy_file() -> PathBuf {
     data_dir().join("policy.json")
 }
 
+/// Drop a leading UTF-8 byte-order mark. Windows PowerShell 5.1 writes one
+/// with `Set-Content -Encoding UTF8`, and serde_json rejects it.
+pub fn strip_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_bom;
+
+    #[test]
+    fn strips_utf8_bom_only() {
+        assert_eq!(strip_bom(b"\xEF\xBB\xBF{}"), b"{}");
+        assert_eq!(strip_bom(b"{}"), b"{}");
+    }
+}
+
 /// Directory for rotating log files.
 pub fn log_dir() -> PathBuf {
     data_dir().join("logs")

@@ -20,7 +20,7 @@ pub fn default_policy() -> Policy {
 pub fn load() -> Policy {
     let path = labctl_common::paths::policy_file();
     match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        Ok(bytes) => serde_json::from_slice(labctl_common::paths::strip_bom(&bytes)).unwrap_or_else(|e| {
             tracing::warn!(?path, error = %e, "policy file unreadable; using baseline");
             default_policy()
         }),

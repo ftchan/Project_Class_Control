@@ -35,6 +35,10 @@ netsh advfirewall firewall delete rule name="LabCtl Discovery (UDP 47801)" 2>$nu
 Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" `
   -Name "LabCtlStudentUI" -ErrorAction SilentlyContinue
 Stop-Process -Name "labctl-student" -Force -ErrorAction SilentlyContinue
+# Wait for the service/UI processes to exit so the exe is no longer locked.
+for ($i = 0; $i -lt 20 -and (Get-Process -Name "labctl-student" -ErrorAction SilentlyContinue); $i++) {
+  Start-Sleep -Milliseconds 500
+}
 
 Write-Host "remove install directory ..." -ForegroundColor Cyan
 Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue

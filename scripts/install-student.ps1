@@ -69,6 +69,19 @@ if (-not (Test-Path $ExePath)) {
 Write-Host "[1/5] install to $InstallDir ..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $targetExe = Join-Path $InstallDir "labctl-student.exe"
+
+# Pre-clean a previous install before overwriting the exe: the running service
+# and tray UI keep it locked. Ignore output/errors (merge stderr so a native
+# stderr write can't abort the script under ErrorActionPreference=Stop).
+if (Test-Path $targetExe) {
+  try { & $targetExe uninstall 2>&1 | Out-Null } catch { }
+  $global:LASTEXITCODE = 0
+  Get-Process -Name "labctl-student" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $targetExe } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  for ($i = 0; $i -lt 20 -and (Get-Process -Name "labctl-student" -ErrorAction SilentlyContinue |
+         Where-Object { $_.Path -eq $targetExe }); $i++) { Start-Sleep -Milliseconds 500 }
+}
 Copy-Item -Path $ExePath -Destination $targetExe -Force
 
 # --- 2. write the initial policy ---
@@ -96,7 +109,9 @@ if ($Passphrase) {
 }
 
 $policyPath = Join-Path $dataDir "policy.json"
-($policy | ConvertTo-Json -Depth 4) | Set-Content -Path $policyPath -Encoding UTF8
+# UTF-8 without BOM: PowerShell 5.1's -Encoding UTF8 adds a BOM that the
+# agent's JSON parser rejects (it would then fall back to the strict baseline).
+[IO.File]::WriteAllText($policyPath, ($policy | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 Write-Host "      wrote $policyPath"
 
 # --- 3. UWF optional feature (only when enabling) ---
@@ -115,10 +130,6 @@ if ($Uwf -eq "on") {
 
 # --- 4. register and start the service ---
 Write-Host "[4/5] register and start the Windows service ..." -ForegroundColor Cyan
-# Pre-clean any previous install; ignore output/errors (merge stderr so a
-# native stderr write can't abort the script under ErrorActionPreference=Stop).
-try { & $targetExe uninstall 2>&1 | Out-Null } catch { }
-$global:LASTEXITCODE = 0
 
 $installOut = & $targetExe install 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE): $installOut" }
@@ -127,7 +138,9 @@ Write-Host ("      " + $installOut.Trim())
 # --- 5. GUI autostart + firewall ---
 Write-Host "[5/5] configure autostart and firewall ..." -ForegroundColor Cyan
 $runKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
-New-Item -Path $runKey -Force | Out-Null
+# Only create the key when missing: New-Item -Force on an existing key
+# recreates it and wipes every other autostart entry.
+if (-not (Test-Path $runKey)) { New-Item -Path $runKey | Out-Null }
 Set-ItemProperty -Path $runKey -Name "LabCtlStudentUI" -Value "`"$targetExe`" ui"
 
 netsh advfirewall firewall delete rule name="LabCtl Agent (TCP 47800)"      2>$null | Out-Null

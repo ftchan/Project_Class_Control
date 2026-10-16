@@ -58,7 +58,7 @@ pub fn load_policy() -> Policy {
     let path = labctl_common::paths::policy_file();
     fs::read(&path)
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|b| serde_json::from_slice(labctl_common::paths::strip_bom(&b)).ok())
         .unwrap_or(Policy {
             usb_storage: UsbStoragePolicy::Deny,
             ..Policy::default()
