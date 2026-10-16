@@ -17,12 +17,59 @@ const state = { clients: new Map() };
 
 const $ = (id) => document.getElementById(id);
 
-function toast(msg) {
+function toast(msg, ms = 2600) {
   const t = $("toast");
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.hidden = true), 2600);
+  toast._t = setTimeout(() => (t.hidden = true), ms);
+}
+
+// Disable a button and show progress while `fn` runs: LAN operations can
+// take seconds, and an unchanged button looks like the click was lost.
+async function busy(btn, label, fn) {
+  if (btn.disabled) return;
+  const old = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span>${label}`;
+  try {
+    return await fn();
+  } catch {
+    toast("请求失败：无法连接教师端服务");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = old;
+  }
+}
+
+// One toast for a bulk action: totals, then each failing (or partly
+// failing) terminal with its reason.
+function summarize(title, res) {
+  const results = res.results || [];
+  const name = (id) => state.clients.get(id)?.hostname || id;
+  const reason = (d) => (d && (d.error || d.message || d.note)) || "未知原因";
+  const failed = results.filter((r) => !r.ok);
+  const partial = results.filter((r) => r.ok && /部分失败/.test(r.detail?.note || ""));
+  const lines = [`${title}：${results.length - failed.length}/${results.length} 台成功`];
+  for (const r of failed) lines.push(`✗ ${name(r.id)}：${reason(r.detail)}`);
+  for (const r of partial) lines.push(`! ${name(r.id)}：${r.detail.note.replace(/^.*?部分失败：/, "")}`);
+  toast(lines.join("\n"), failed.length || partial.length ? 9000 : 2600);
+}
+
+// Display text and style for ClientStatus.uwf_state (enabling takes reboots).
+function uwfLabel(st) {
+  const s = st.uwf_state;
+  if (!s) return st.uwf_enabled === true ? ["UWF:开", "pill-ok"] : st.uwf_enabled === false ? ["UWF:关", ""] : ["UWF:—", ""];
+  if (s.startsWith("error:")) return [`UWF:出错`, "pill-bad", s.slice(6)];
+  return {
+    on: ["UWF:已开启", "pill-ok"],
+    on_next_boot: ["UWF:重启后生效", "pill-warn"],
+    off_next_boot: ["UWF:重启后关闭", "pill-warn"],
+    off: ["UWF:关", ""],
+    installing: ["UWF:安装中…", "pill-warn"],
+    install_pending_reboot: ["UWF:已安装，需重启", "pill-warn"],
+    not_installed: ["UWF:未安装", ""],
+  }[s] || [`UWF:${s}`, ""];
 }
 
 function usbLabel(v) {
@@ -47,7 +94,8 @@ function render() {
       ? `<img class="thumb" alt="screen" src="data:image/jpeg;base64,${c.thumbnail.jpeg_base64}" />`
       : `<div class="thumb thumb-empty">无画面</div>`;
 
-    const uwf = st.uwf_enabled === true ? "UWF:开" : st.uwf_enabled === false ? "UWF:关" : "UWF:—";
+    const [uwfText, uwfClass, uwfTip] = uwfLabel(st);
+    const uwf = `<span class="pill ${uwfClass}" title="${(uwfTip || "").replace(/"/g, "&quot;")}">${uwfText}</span>`;
     const user = st.logged_in_user ? `用户:${st.logged_in_user}` : "未登录";
     const lock = st.session_locked ? `<span class="pill">口令保护</span>` : "";
 
@@ -60,7 +108,7 @@ function render() {
         </div>
         <div class="meta">
           <span class="pill">${user}</span>
-          <span class="pill">${uwf}</span>
+          ${uwf}
           <span class="pill">rev ${st.policy_revision ?? 0}</span>
           ${lock}
         </div>
@@ -104,27 +152,36 @@ document.addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
   const id = btn.dataset.id;
+  const done = (res, okMsg) =>
+    toast(res.ok && res.report?.type !== "error" ? okMsg : `失败：${res.error || res.report?.message || "未知原因"}`);
   if (btn.dataset.act === "launch") {
-    await api.post(`/api/clients/${id}/launch`);
-    toast("已发送唤起指令");
+    await busy(btn, "唤起中…", async () => done(await api.post(`/api/clients/${id}/launch`), "已发送唤起指令"));
   } else if (btn.dataset.act === "reboot") {
     if (!confirm("确定重启该终端并恢复到还原点？")) return;
-    await api.post(`/api/clients/${id}/reboot`, { restore: true, delay_secs: 5 });
-    toast("已发送重启还原指令");
+    await busy(btn, "发送中…", async () =>
+      done(await api.post(`/api/clients/${id}/reboot`, { restore: true, delay_secs: 5 }), "已发送重启还原指令"));
   }
 });
 
-$("btn-launch-all").onclick = async () => {
-  const ids = [...state.clients.keys()];
-  await Promise.all(ids.map((id) => api.post(`/api/clients/${id}/launch`)));
-  toast(`已唤起 ${ids.length} 台终端`);
-};
 
-$("btn-reboot-all").onclick = async () => {
-  if (!confirm("确定重启全部终端并恢复到还原点？")) return;
+// Run a per-client endpoint for every terminal and collect bulk-style results.
+async function forAll(path, body) {
   const ids = [...state.clients.keys()];
-  await Promise.all(ids.map((id) => api.post(`/api/clients/${id}/reboot`, { restore: true, delay_secs: 5 })));
-  toast(`已向 ${ids.length} 台终端下发重启还原`);
+  const results = await Promise.all(ids.map(async (id) => {
+    const r = await api.post(`/api/clients/${id}/${path}`, body).catch(() => ({ ok: false, error: "请求失败" }));
+    const ok = r.ok && r.report?.type !== "error";
+    return { id, ok, detail: ok ? r.report : { error: r.error || r.report?.message } };
+  }));
+  return { results };
+}
+
+$("btn-launch-all").onclick = (e) =>
+  busy(e.currentTarget, "唤起中…", async () => summarize("唤起客户端", await forAll("launch")));
+
+$("btn-reboot-all").onclick = (e) => {
+  if (!confirm("确定重启全部终端并恢复到还原点？")) return;
+  return busy(e.currentTarget, "发送中…", async () =>
+    summarize("重启还原", await forAll("reboot", { restore: true, delay_secs: 5 })));
 };
 
 // --- Policy drawer ---
@@ -172,7 +229,8 @@ $("p-wallpaper-pick").onclick = async () => {
 };
 
 
-$("btn-update-client").onclick = async () => {
+$("btn-update-client").onclick = async (e) => {
+  const btn = e.currentTarget;
   let src;
   try {
     const r = await api.post("/api/pick-exe");
@@ -182,12 +240,10 @@ $("btn-update-client").onclick = async () => {
   const target = prompt("学生机安装路径（留空＝与学生端服务同目录）：", "") || null;
   const n = state.clients.size;
   if (!confirm(`将所选客户端下发并无感更新到 ${n} 台终端，更新后自动运行？\n\n源文件：${src}${target ? "\n目标：" + target : ""}`)) return;
-  toast("正在下发客户端更新…");
-  try {
+  await busy(btn, "下发中…", async () => {
     const res = await api.post("/api/update-client", { source_path: src, target_path: target, run_after: true });
-    const ok = (res.results || []).filter((r) => r.ok).length;
-    toast(`客户端更新：${ok}/${(res.results || []).length} 台成功（${Math.round((res.size || 0) / 1024)} KB）`);
-  } catch { toast("下发失败"); }
+    summarize(`客户端更新（${Math.round((res.size || 0) / 1024)} KB）`, res);
+  });
 };
 
 // --- One-click restore defaults dialog ---
@@ -208,17 +264,18 @@ $("d-wallpaper-pick").onclick = async () => {
   } catch { toast("无法打开文件选择框"); }
 };
 
-$("defaults-apply").onclick = async () => {
+$("defaults-apply").onclick = (e) => {
   const wallpaper = $("d-wallpaper").value.trim();
   // Remember the chosen default wallpaper for next time.
   api.post("/api/settings", collectSettings()).catch(() => {});
-  closeDefaults();
-  const res = await api.post("/api/apply-defaults", { wallpaper_path: wallpaper || null });
-  const ok = (res.results || []).filter((r) => r.ok).length;
-  toast(`一键恢复默认：${ok}/${(res.results || []).length} 台已下发${wallpaper ? "（含默认壁纸）" : ""}`);
+  return busy(e.currentTarget, "恢复中…", async () => {
+    const res = await api.post("/api/apply-defaults", { wallpaper_path: wallpaper || null });
+    closeDefaults();
+    summarize(`一键恢复默认${wallpaper ? "（含默认壁纸）" : ""}`, res);
+  });
 };
 
-$("drawer-apply").onclick = async () => {
+$("drawer-apply").onclick = (e) => busy(e.currentTarget, "下发中…", async () => {
   const uwfSel = $("p-uwf").value;
   const policy = {
     lock_wallpaper: $("p-wallpaper").checked,
@@ -242,11 +299,9 @@ $("drawer-apply").onclick = async () => {
   api.post("/api/settings", collectSettings()).catch(() => {});
 
   const res = await api.post("/api/policy", policy);
-  const ok = (res.results || []).filter((r) => r.ok).length;
-  const total = (res.results || []).length;
   closeDrawer();
-  toast(`策略已下发：${ok}/${total} 台成功`);
-};
+  summarize("策略下发", res);
+});
 
 // boot
 connectWs();

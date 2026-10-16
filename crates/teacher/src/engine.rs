@@ -6,6 +6,7 @@
 //! simple and resilient to clients coming and going.
 
 use anyhow::{Context, Result};
+use futures_util::future::join_all;
 use labctl_common::net::{read_frame, write_frame};
 use labctl_common::policy::Policy;
 use labctl_common::protocol::{
@@ -172,9 +173,7 @@ impl Engine {
 
     async fn refresh_all(&self) {
         let records = self.roster().await;
-        for rec in records {
-            let _ = self.refresh_one(rec.machine_id).await;
-        }
+        join_all(records.iter().map(|rec| self.refresh_one(rec.machine_id))).await;
         let _ = self.events.send(Event::Roster { clients: self.roster().await });
     }
 
@@ -241,16 +240,21 @@ impl Engine {
 
     pub async fn push_policy(&self, id: Uuid, policy: Policy) -> Result<Report> {
         let rec = self.record(id).await.context("unknown client")?;
-        self.exchange(Self::addr_of(&rec)?, Command::PushPolicy { policy }).await
+        // Applying runs netsh and registry writes on the client; UWF work
+        // continues there in the background.
+        self.exchange_to(Self::addr_of(&rec)?, Command::PushPolicy { policy }, Duration::from_secs(15))
+            .await
     }
 
+    /// Push to every client at once, so the whole class takes as long as the
+    /// slowest machine rather than the sum of all of them.
     pub async fn push_policy_all(&self, policy: Policy) -> Vec<(Uuid, Result<Report>)> {
-        let mut out = Vec::new();
-        for rec in self.roster().await {
-            let r = self.push_policy(rec.machine_id, policy.clone()).await;
-            out.push((rec.machine_id, r));
-        }
-        out
+        let records = self.roster().await;
+        join_all(records.iter().map(|rec| {
+            let policy = policy.clone();
+            async move { (rec.machine_id, self.push_policy(rec.machine_id, policy).await) }
+        }))
+        .await
     }
 
     pub async fn launch_ui(&self, id: Uuid) -> Result<Report> {
@@ -272,21 +276,23 @@ impl Engine {
         data_base64: String,
         run_after: bool,
     ) -> Vec<(Uuid, Result<Report>)> {
-        let mut out = Vec::new();
-        for rec in self.roster().await {
+        let records = self.roster().await;
+        join_all(records.iter().map(|rec| {
             let cmd = Command::UpdateClient {
                 filename: filename.clone(),
                 target_path: target_path.clone(),
                 data_base64: data_base64.clone(),
                 run_after,
             };
-            let r = match Self::addr_of(&rec) {
-                Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(90)).await,
-                Err(e) => Err(e),
-            };
-            out.push((rec.machine_id, r));
-        }
-        out
+            async move {
+                let r = match Self::addr_of(rec) {
+                    Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(90)).await,
+                    Err(e) => Err(e),
+                };
+                (rec.machine_id, r)
+            }
+        }))
+        .await
     }
 
     /// Broadcast the one-click "restore desktop defaults" to every client.
@@ -295,19 +301,21 @@ impl Engine {
         wallpaper_data_base64: Option<String>,
         wallpaper_name: Option<String>,
     ) -> Vec<(Uuid, Result<Report>)> {
-        let mut out = Vec::new();
-        for rec in self.roster().await {
+        let records = self.roster().await;
+        join_all(records.iter().map(|rec| {
             let cmd = Command::ApplyDefaults {
                 wallpaper_data_base64: wallpaper_data_base64.clone(),
                 wallpaper_name: wallpaper_name.clone(),
             };
-            let r = match Self::addr_of(&rec) {
-                Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(30)).await,
-                Err(e) => Err(e),
-            };
-            out.push((rec.machine_id, r));
-        }
-        out
+            async move {
+                let r = match Self::addr_of(rec) {
+                    Ok(addr) => self.exchange_to(addr, cmd, Duration::from_secs(30)).await,
+                    Err(e) => Err(e),
+                };
+                (rec.machine_id, r)
+            }
+        }))
+        .await
     }
 }
 

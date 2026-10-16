@@ -122,7 +122,7 @@ async fn policy_all(
     let results = engine.push_policy_all(policy).await;
     let body: Vec<_> = results
         .into_iter()
-        .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))
+        .map(|(id, r)| json!({ "id": id, "ok": succeeded(&r), "detail": describe(r) }))
         .collect();
     Json(json!({ "results": body })).into_response()
 }
@@ -191,7 +191,7 @@ async fn update_client(
         .await;
     let body: Vec<_> = results
         .into_iter()
-        .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))
+        .map(|(id, r)| json!({ "id": id, "ok": succeeded(&r), "detail": describe(r) }))
         .collect();
     Json(json!({ "size": bytes.len(), "results": body })).into_response()
 }
@@ -225,7 +225,7 @@ async fn apply_defaults(
     let results = engine.apply_defaults_all(data, name).await;
     let body: Vec<_> = results
         .into_iter()
-        .map(|(id, r)| json!({ "id": id, "ok": r.is_ok(), "detail": describe(r) }))
+        .map(|(id, r)| json!({ "id": id, "ok": succeeded(&r), "detail": describe(r) }))
         .collect();
     Json(json!({ "results": body })).into_response()
 }
@@ -292,6 +292,11 @@ fn reply(r: anyhow::Result<labctl_common::protocol::Report>) -> axum::response::
         Ok(report) => Json(json!({ "ok": true, "report": report_json(&report) })).into_response(),
         Err(e) => error(&e.to_string()),
     }
+}
+
+/// The client was reached and did not answer with an error report.
+fn succeeded(r: &anyhow::Result<labctl_common::protocol::Report>) -> bool {
+    matches!(r, Ok(rep) if !matches!(rep, labctl_common::protocol::Report::Error { .. }))
 }
 
 fn describe(r: anyhow::Result<labctl_common::protocol::Report>) -> serde_json::Value {
