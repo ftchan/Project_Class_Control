@@ -67,7 +67,7 @@ start "" "labctl-teacher.exe"
   Write-Host "== 打包学生端 $sDir ==" -ForegroundColor Cyan
   New-Item -ItemType Directory -Force -Path $sApp | Out-Null
   Copy-Item $student $sApp -Force
-  foreach ($f in "install-student.bat", "install-student.ps1", "uninstall-student.ps1", "deploy-lab.ps1") {
+  foreach ($f in "install-student.bat", "install-student.ps1", "uninstall-student.bat", "uninstall-student.ps1", "deploy-lab.ps1") {
     Copy-Item (Join-Path $root "students\$f") $sApp -Force
   }
   Copy-Item (Join-Path $root "README.md") $sDir -Force

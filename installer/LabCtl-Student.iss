@@ -46,6 +46,7 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "{#BinDir}\labctl-student.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\students\uninstall-student.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";                 DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -87,6 +88,10 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/f /im labctl-student.exe"; \
   Flags: runhidden; RunOnceId: "StopLabCtlUi"
 Filename: "{app}\labctl-student.exe"; Parameters: "uninstall"; \
   Flags: runhidden waituntilterminated; RunOnceId: "RemoveLabCtlService"
+; 服务移除后再恢复它改动过的系统功能（UWF、U 盘、联网、壁纸锁定、任务管理器）。
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall-student.ps1"" -RestoreOnly"; \
+  Flags: runhidden waituntilterminated; RunOnceId: "RestoreSystem"
 
 #ifdef HasChinese
 [Messages]

@@ -16,7 +16,7 @@ Web 控制台采用 **shadcn 风格**界面。分为 **教师端（控制台）*
 ### 学生端（受管客户端） `labctl-student`
 | 功能 | 实现方式 | 说明 |
 |------|----------|------|
-| 锁定桌面壁纸 | 组策略等效注册表项 `NoChangingWallPaper` + 可选强制壁纸 | 可逆，清除即恢复 |
+| 锁定桌面壁纸 | 机器级组策略 `NoChangingWallPaper`（HKLM，Win11“设置”中背景变灰）+ `PersonalizationCSP` 强制壁纸 | 可逆，解锁即恢复 |
 | U 盘 / 移动存储策略 | `USBSTOR\Start`（允许/禁用）、`StorageDevicePolicies\WriteProtect`（只读） | 仅影响大容量存储，不影响键鼠 |
 | UWF 写入筛选器 开/关 | 读：WMI `root\standardcimv2\embedded` 的 `UWF_Filter`；写：`uwfmgr.exe`；必要时 DISM 安装可选功能 `Client-UnifiedWriteFilter` | **Windows 10 专业版**即可，无需转企业版/教育版，参考 [UWF-Manager](https://github.com/JIRBOY/UWF-Manager) |
 | 客户端访问口令 | Argon2id 口令哈希校验 | 仅客户端下发哈希，防止学生随意改动客户端配置 |
@@ -142,13 +142,20 @@ REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase la
 ```
 > 校内也可改用**组策略（GPO）启动脚本**或 SCCM/Intune 分发 `install-student.ps1`，原理相同。
 
-### C. 卸载
+### C. 一键卸载（并恢复所有功能）
+在学生机**双击 `students\uninstall-student.bat`**（会自动弹 UAC 提权）。它会卸载学生端，并恢复它改动过的一切：
+UWF（关闭筛选器并移除功能）、U 盘、防火墙与联网、壁纸锁定、任务管理器（本机所有用户，含未登录的账户）。
+用安装包装的，在“程序和功能”里卸载也会同样恢复。
+
+> 若 UWF 正在保护系统盘，此时的改动重启后会被还原：脚本会先关闭 UWF 并提示重启，
+> **重启后再运行一次**即可完成卸载。
+
+也可直接用 PowerShell（管理员）：
 ```powershell
-.\students\uninstall-student.ps1          # 停止服务、删除程序与数据
-.\students\uninstall-student.ps1 -KeepData # 保留策略/日志
+.\students\uninstall-student.ps1                 # 卸载并恢复
+.\students\uninstall-student.ps1 -KeepData       # 保留策略/日志
+.\students\uninstall-student.ps1 -KeepUwfFeature # 只关闭 UWF，不移除功能
 ```
-> 卸载**不会**自动回退壁纸/U盘等注册表策略；如需恢复，先在控制台下发
-> “解锁壁纸 + U盘允许 + UWF不管理”的空策略，再卸载。
 
 ### 排错：GUI 提示"计算机积极拒绝" / 教师机看不到学生机
 
