@@ -3192,7 +3192,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-common"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3208,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-student"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3219,6 +3219,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "sysinfo",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -3235,7 +3236,7 @@ dependencies = [
 
 [[package]]
 name = "labctl-teacher"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "axum",
