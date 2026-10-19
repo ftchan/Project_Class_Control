@@ -1,9 +1,9 @@
 name: Windows build
 
 # 在 Windows 云端编译并分别打包教师端、学生端（与本地 build-release.ps1 完全一致）。
-#  - 每次运行：两个产品作为 Artifact 上传（需登录下载，会过期）。
+#  - 每次运行：教师端、学生端和一键卸载工具作为 Artifact 上传（需登录下载，会过期）。
 #  - 推送到 main/master 时，若 Cargo.toml 的版本 v<version> 还没有 tag：
-#    自动打 tag 并创建 GitHub Release，附带两个 zip 和两个安装包（永久下载链接）。
+#    自动打 tag 并创建 GitHub Release，附带三个 zip 和两个安装包（永久下载链接）。
 #  - 手动推送 vX.Y.Z 形式的 tag：同样创建对应的 Release。
 
 on:
@@ -81,6 +81,12 @@ jobs:
           name: LabCtl-Student-${{ steps.ver.outputs.version }}
           path: dist/LabCtl-Student-${{ steps.ver.outputs.version }}
 
+      - name: Upload uninstaller artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabCtl-Uninstall-${{ steps.ver.outputs.version }}
+          path: dist/LabCtl-Uninstall-${{ steps.ver.outputs.version }}
+
       - name: Tag and release
         if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
@@ -93,5 +99,6 @@ jobs:
           files: |
             dist/LabCtl-Teacher-${{ steps.ver.outputs.version }}.zip
             dist/LabCtl-Student-${{ steps.ver.outputs.version }}.zip
+            dist/LabCtl-Uninstall-${{ steps.ver.outputs.version }}.zip
             dist/LabCtl-Teacher-Setup-${{ steps.ver.outputs.version }}.exe
             dist/LabCtl-Student-Setup-${{ steps.ver.outputs.version }}.exe

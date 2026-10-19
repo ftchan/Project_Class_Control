@@ -12,7 +12,7 @@
   6. 删除程序目录、数据目录与各用户的界面日志。
 
 .PARAMETER InstallDir
-  安装目录，默认 "C:\Program Files\LabCtl"。
+  安装目录。默认自动识别（服务登记的程序路径 → 开机自启项 → "C:\Program Files\LabCtl"）。
 .PARAMETER KeepData
   保留 C:\ProgramData\LabCtl（策略、机器标识、日志）。
 .PARAMETER KeepUwfFeature
@@ -22,7 +22,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$InstallDir = "C:\Program Files\LabCtl",
+  [string]$InstallDir,
   [switch]$KeepData,
   [switch]$KeepUwfFeature,
   [switch]$RestoreOnly
@@ -36,6 +36,32 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 }
 
 function Step($msg) { Write-Host $msg -ForegroundColor Cyan }
+
+# Remove the student's data. The teacher console keeps its settings in the
+# same folder (console-settings.json) on a machine that runs both, so keep
+# that file and drop the folder only once it is empty.
+function Remove-StudentData($dir) {
+  Get-ChildItem $dir -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne "console-settings.json" } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  if (-not (Get-ChildItem $dir -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item $dir -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Where the client is installed: `setup --install-dir` may have chosen any
+# folder, so read the service's image path, then the autostart entry.
+if (-not $InstallDir) {
+  $registered = @(
+    (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\LabCtlStudent" -ErrorAction SilentlyContinue).ImagePath,
+    (Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -ErrorAction SilentlyContinue).LabCtlStudentUI
+  ) | Where-Object { $_ } | Select-Object -First 1
+  if ($registered -match '^\s*"([^"]+)"' -or $registered -match '^\s*(\S+)') {
+    $InstallDir = Split-Path $Matches[1] -Parent
+  }
+  if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles "LabCtl" }
+}
+Write-Host "install directory: $InstallDir" -ForegroundColor DarkGray
 
 # Run a native tool quietly and return its exit code. PowerShell 5.1 turns a
 # native tool's stderr into a terminating error under ErrorActionPreference
@@ -201,11 +227,17 @@ exit 0
 # --- 6. files ---
 if (-not $RestoreOnly) {
   Step "[6/6] remove program and data ..."
-  Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
-  if (-not $KeepData) { Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue }
+  if ((Split-Path $InstallDir -Leaf) -eq "LabCtl") {
+    Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+  } else {
+    # A custom folder may hold other files: remove only the client's own.
+    Get-ChildItem $InstallDir -Filter "labctl-student.exe*" -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $KeepData) { Remove-StudentData $dataDir }
 } else {
   Step "[6/6] (restore only: files left to the installer)"
-  if (-not $KeepData) { Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue }
+  if (-not $KeepData) { Remove-StudentData $dataDir }
 }
 
 Write-Host ""

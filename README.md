@@ -18,16 +18,17 @@ Web 控制台采用 **shadcn 风格**界面。分为 **教师端（控制台）*
 |------|----------|------|
 | 锁定桌面壁纸 | 机器级组策略 `NoChangingWallPaper`（HKLM，Win11“设置”中背景变灰）+ `PersonalizationCSP` 强制壁纸 | 可逆，解锁即恢复 |
 | U 盘 / 移动存储策略 | `USBSTOR\Start`（允许/禁用）、`StorageDevicePolicies\WriteProtect`（只读） | 仅影响大容量存储，不影响键鼠 |
-| UWF 写入筛选器 开/关 | 读：WMI `root\standardcimv2\embedded` 的 `UWF_Filter`；写：`uwfmgr.exe`；必要时 DISM 安装可选功能 `Client-UnifiedWriteFilter` | **Windows 10 专业版**即可，无需转企业版/教育版，参考 [UWF-Manager](https://github.com/JIRBOY/UWF-Manager) |
+| UWF 写入筛选器 开/关 | 通过 WMI `root\standardcimv2\embedded` 的 `UWF_Filter` 读写；缓存（overlay）用**磁盘模式**，不占内存（UWF 规定缓存文件只能建在系统盘，大小取 C 盘剩余空间一半，2–20 GB）；必要时 DISM 安装可选功能 `Client-UnifiedWriteFilter` | **Windows 10 专业版**即可，无需转企业版/教育版，参考 [UWF-Manager](https://github.com/JIRBOY/UWF-Manager) |
 | 客户端访问口令 | Argon2id 口令哈希校验 | 仅客户端下发哈希，防止学生随意改动客户端配置 |
-| 进程保持运行 | 注册为 Windows 服务 + SCM 失败恢复（自动重启） | 常规运维防护，非反查杀；管理员可正常停止/卸载 |
-| 可视化 GUI 客户端 | 同一 exe 的 `ui` 模式（slint，亮色）| 托盘常驻；可本机开关 UWF；受教师端策略控制；**首次运行设密码**，之后每次打开/退出都需密码；关闭窗口仅最小化到托盘；**开机自启** |
+| 进程保持运行 | 注册为 Windows 服务 + SCM 失败恢复（自动重启）；服务在用户登录期间恢复意外退出的托盘界面 | 常规运维防护；管理员可正常停止/卸载 |
+| 可视化 GUI 客户端 | 同一 exe 的 `ui` 模式（slint，亮色）| 托盘常驻；首次运行设访问密码；关闭窗口仅最小化到托盘；登录自启；管理员入口可调整本机策略和恢复初始状态 |
 
 命令：
 ```
 labctl-student run         前台运行（开发/调试）
+labctl-student setup       一键安装全部学生端组件（自动请求管理员权限）
 labctl-student service     作为 Windows 服务运行（由 SCM 调用）
-labctl-student install     注册 Windows 服务（需管理员）
+labctl-student install     仅注册 Windows 服务（兼容旧部署脚本）
 labctl-student uninstall   卸载 Windows 服务（需管理员）
 labctl-student ui          口令解锁界面
 ```
@@ -115,35 +116,37 @@ cargo build --release
 ## 部署（机房管理员）
 
 ### A. 单机一键部署（最简单）
-把学生端产品里的 `students\` 文件夹（含 `labctl-student.exe`、`install-student.bat`、
-`install-student.ps1`）拷到 U 盘，在每台教学机**双击 `install-student.bat`**（会自动弹 UAC 提权）。
-也可以直接运行 `LabCtl-Student-Setup-<版本>.exe` 安装。它会：
-复制程序 → 写入初始策略 → （需要时）安装 UWF 功能 → 注册并启动服务。
+只需把 `labctl-student.exe` 拷到教学机，**双击它**并同意 UAC 提权。程序会自行复制到
+`C:\Program Files\LabCtl`、写入初始策略、启用 UWF 功能、注册并启动服务、配置登录自启与
+防火墙。默认策略与旧 `install-student.bat` 一致：U 盘禁用、UWF 开启。安装后再双击已安装的
+程序会打开学生端界面。`install-student.bat` 仅作为兼容入口，不再需要 PowerShell 脚本。
 
-机房默认策略在 `install-student.bat` 顶部这行改：
-```bat
-set "POLICY=-LockWallpaper -Usb readonly -Uwf on"
-REM 加口令： set "POLICY=-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
-```
-
-也可直接用 PowerShell（管理员）精细控制：
+也可以用命令行设置初始策略：
 ```powershell
-.\students\install-student.ps1 -LockWallpaper -Usb readonly -Uwf on -Passphrase "lab-2016"
+.\labctl-student.exe setup --usb readonly --uwf on --lock-wallpaper --passphrase "lab-2016"
 ```
-参数：`-Usb allow|readonly|deny`、`-Uwf on|off|unmanaged`、`-WallpaperPath <图片>`、
-`-InstallDir <目录>`、`-Passphrase <口令>`。
+支持 `--usb allow|readonly|deny`、`--uwf on|off|unmanaged`、`--lock-wallpaper`、
+`--wallpaper-path <本机图片路径>`、`--passphrase <客户端访问密码>`、
+`--install-dir <安装目录>`、`--quiet`。
+重新运行 `setup` 会保留已有策略，除非显式提供新的策略参数。也可使用
+`LabCtl-Student-Setup-<版本>.exe` 安装包。
+
+学生端界面底部的“关于”连续点击五次，可输入管理员口令进入管理员模式。此模式可以调整
+壁纸、U 盘、UWF 与保护范围、任务管理器、联网及客户端访问密码。点击“一键恢复初始状态”
+会允许 U 盘、联网和任务管理器，解除壁纸锁定，关闭 UWF，并在 60 秒后重启完成切换。
 
 ### B. 整机房批量部署（从教师机推送）
 前提：目标机开启 `admin$` 共享、账号有管理员权限、已装 [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec)。
 把所有教学机的主机名/IP 写进 `pcs.txt`（每行一个），然后：
 ```powershell
 .\students\deploy-lab.ps1 -HostsFile .\pcs.txt -ExePath .\students\labctl-student.exe `
-    -PolicyArgs "-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
+    -SetupArgs "--lock-wallpaper --usb readonly --uwf on --passphrase lab-2016"
 ```
 > 校内也可改用**组策略（GPO）启动脚本**或 SCCM/Intune 分发 `install-student.ps1`，原理相同。
 
 ### C. 一键卸载（并恢复所有功能）
-在学生机**双击 `students\uninstall-student.bat`**（会自动弹 UAC 提权）。它会卸载学生端，并恢复它改动过的一切：
+Release 里有独立的 **`LabCtl-Uninstall-<版本>.zip`**（不依赖教师端/学生端包），解压后在学生机
+**双击 `uninstall-student.bat`**（会自动弹 UAC 提权）；学生端包里的 `students\uninstall-student.bat` 作用相同。它会卸载学生端，并恢复它改动过的一切：
 UWF（关闭筛选器并移除功能）、U 盘、防火墙与联网、壁纸锁定、任务管理器（本机所有用户，含未登录的账户）。
 用安装包装的，在“程序和功能”里卸载也会同样恢复。
 
@@ -170,8 +173,7 @@ GUI 客户端只是界面，真正监听端口、被教师端连接的是后台�
 sc query LabCtlStudent
 netstat -ano | findstr 47800
 ```
-- 服务不是 `RUNNING` → 多半是**没用一键脚本/没用管理员装**，只运行了 GUI。
-  重新以管理员运行 `install-student.bat`（或 `labctl-student install`）。
+- 服务不是 `RUNNING` → 重新运行 `labctl-student.exe setup`，确认完成 UAC 授权。
 - 服务在跑、但教师机发现不到 → **防火墙**。新版安装器与服务启动时会自动放行
   TCP 47800 / UDP 47801；若仍不行，手动执行：
   ```bash
