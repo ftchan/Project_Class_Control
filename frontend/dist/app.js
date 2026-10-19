@@ -68,6 +68,7 @@ function uwfLabel(st) {
     off: ["UWF:关", ""],
     installing: ["UWF:安装中…", "pill-warn"],
     install_pending_reboot: ["UWF:已安装，需重启", "pill-warn"],
+    switching_to_disk: ["UWF:切换磁盘缓存，需重启", "pill-warn"],
     not_installed: ["UWF:未安装", ""],
   }[s] || [`UWF:${s}`, ""];
 }
@@ -394,6 +395,7 @@ function renderViewer() {
     ["地址", c.addr],
     ["客户端版本", st.agent_version || "—"],
     ["UWF", uwfLabel(st)[0].replace(/^UWF:/, "")],
+    ["UWF 缓存", st.uwf_overlay || "—"],
     ["策略版本", st.policy_revision ?? 0],
     ["口令保护", st.session_locked ? "是" : "否"],
     ["最后在线", c.last_seen ? new Date(c.last_seen).toLocaleString() : "—"],
