@@ -7,7 +7,7 @@
 //! broadcast/multicast used by discovery. Fully reversible.
 
 #[cfg(windows)]
-pub fn apply(block: bool) {
+pub fn apply(block: bool) -> anyhow::Result<()> {
     // Private + link-local + multicast + limited broadcast. Covers typical
     // school LANs and our UDP discovery.
     const LAN: &str =
@@ -15,23 +15,15 @@ pub fn apply(block: bool) {
     const OUT_RULE: &str = "LabCtl Allow LAN (out)";
     const IN_RULE: &str = "LabCtl Allow LAN (in)";
 
-    let netsh = |args: &[&str]| {
-        let out = crate::hidden_command("netsh").args(args).output();
-        match out {
-            Ok(o) if o.status.success() => true,
-            Ok(o) => {
-                tracing::warn!(?args, stderr = %String::from_utf8_lossy(&o.stderr), "netsh failed");
-                false
-            }
-            Err(e) => {
-                tracing::warn!(?args, error = %e, "netsh not runnable");
-                false
-            }
-        }
+    let netsh = |args: &[&str]| -> anyhow::Result<()> {
+        let out = crate::hidden_command("netsh").args(args).output()?;
+        anyhow::ensure!(out.status.success(), "netsh {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
+        Ok(())
     };
 
     // Always refresh the LAN allow rules first so enabling the block can never
     // lock out LAN management.
+    // netsh reports "no rules match" as non-zero on some Windows versions.
     let _ = netsh(&["advfirewall", "firewall", "delete", "rule", &format!("name={OUT_RULE}")]);
     let _ = netsh(&["advfirewall", "firewall", "delete", "rule", &format!("name={IN_RULE}")]);
 
@@ -39,22 +31,24 @@ pub fn apply(block: bool) {
         netsh(&[
             "advfirewall", "firewall", "add", "rule", &format!("name={OUT_RULE}"),
             "dir=out", "action=allow", &format!("remoteip={LAN}"), "profile=any",
-        ]);
+        ])?;
         netsh(&[
             "advfirewall", "firewall", "add", "rule", &format!("name={IN_RULE}"),
             "dir=in", "action=allow", &format!("remoteip={LAN}"), "profile=any",
-        ]);
+        ])?;
         // Default-deny outbound (inbound stays default-deny as usual).
-        netsh(&["advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"]);
+        netsh(&["advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"])?;
         tracing::info!("internet access blocked (LAN still allowed)");
     } else {
         // Restore the Windows default policy.
-        netsh(&["advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,allowoutbound"]);
+        netsh(&["advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,allowoutbound"])?;
         tracing::info!("internet access restored");
     }
+    Ok(())
 }
 
 #[cfg(not(windows))]
-pub fn apply(block: bool) {
+pub fn apply(block: bool) -> anyhow::Result<()> {
     tracing::info!(block, "block_internet (no-op on this platform)");
+    Ok(())
 }

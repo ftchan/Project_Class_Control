@@ -7,14 +7,23 @@
 //! installer adds them too. Rules are scoped to our two ports only.
 
 #[cfg(windows)]
-pub fn ensure_rules() {
+pub fn ensure_rules() -> Vec<String> {
     use labctl_common::{DEFAULT_PORT, DISCOVERY_PORT};
-    add_rule("LabCtl Agent (TCP 47800)", "TCP", DEFAULT_PORT);
-    add_rule("LabCtl Discovery (UDP 47801)", "UDP", DISCOVERY_PORT);
+    let mut errors = Vec::new();
+    for (name, proto, port) in [
+        ("LabCtl Agent (TCP 47800)", "TCP", DEFAULT_PORT),
+        ("LabCtl Discovery (UDP 47801)", "UDP", DISCOVERY_PORT),
+    ] {
+        if let Err(e) = add_rule(name, proto, port) {
+            tracing::warn!(%name, error = %e, "firewall rule failed");
+            errors.push(format!("{name}: {e}"));
+        }
+    }
+    errors
 }
 
 #[cfg(windows)]
-fn add_rule(name: &str, proto: &str, port: u16) {
+fn add_rule(name: &str, proto: &str, port: u16) -> anyhow::Result<()> {
     // Delete any existing rule with this name first, so repeated starts stay
     // idempotent instead of stacking duplicate rules.
     let _ = crate::hidden_command("netsh")
@@ -33,12 +42,11 @@ fn add_rule(name: &str, proto: &str, port: u16) {
         ])
         .output();
 
-    match out {
-        Ok(o) if o.status.success() => tracing::info!(%name, "firewall rule ensured"),
-        Ok(o) => tracing::warn!(%name, stderr = %String::from_utf8_lossy(&o.stderr), "firewall rule add failed (need admin?)"),
-        Err(e) => tracing::warn!(%name, error = %e, "could not run netsh"),
-    }
+    let out = out?;
+    anyhow::ensure!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    tracing::info!(%name, "firewall rule ensured");
+    Ok(())
 }
 
 #[cfg(not(windows))]
-pub fn ensure_rules() {}
+pub fn ensure_rules() -> Vec<String> { Vec::new() }

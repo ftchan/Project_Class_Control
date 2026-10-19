@@ -14,7 +14,10 @@ const MAX_FRAME: usize = 8 * 1024 * 1024;
 
 pub fn send(cmd: Command) -> anyhow::Result<Report> {
     let mut s = TcpStream::connect(("127.0.0.1", labctl_common::DEFAULT_PORT))?;
-    s.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let read_timeout = if matches!(&cmd, Command::AdminSetPolicy { .. } | Command::AdminRestore { .. }) {
+        Duration::from_secs(60)
+    } else { Duration::from_secs(5) };
+    s.set_read_timeout(Some(read_timeout))?;
     s.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     let body = serde_json::to_vec(&Envelope::command(cmd))?;

@@ -16,12 +16,12 @@
 .PARAMETER PsExec
   PsExec.exe 路径（默认在 PATH 中）。
 
-.PARAMETER PolicyArgs
-  传给 install-student.ps1 的策略参数字符串，例如 "-LockWallpaper -Usb readonly -Uwf on"。
+.PARAMETER SetupArgs
+  传给学生端 EXE 的策略参数，例如 "--lock-wallpaper --usb readonly --uwf on"。
 
 .EXAMPLE
   .\deploy-lab.ps1 -HostsFile .\pcs.txt -ExePath .\labctl-student.exe `
-      -PolicyArgs "-LockWallpaper -Usb readonly -Uwf on -Passphrase lab-2016"
+      -SetupArgs "--lock-wallpaper --usb readonly --uwf on --passphrase lab-2016"
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +29,7 @@ param(
   [string]$HostsFile,
   [Parameter(Mandatory)] [string]$ExePath,
   [string]$PsExec = "PsExec.exe",
-  [string]$PolicyArgs = "-LockWallpaper -Usb readonly -Uwf on"
+  [Alias('PolicyArgs')] [string]$SetupArgs = "--lock-wallpaper --usb readonly --uwf on"
 )
 $ErrorActionPreference = "Stop"
 
@@ -37,7 +37,13 @@ if ($HostsFile) { $Hosts = Get-Content $HostsFile | Where-Object { $_ -and -not 
 if (-not $Hosts) { throw "请用 -Hosts 或 -HostsFile 指定目标主机。" }
 if (-not (Test-Path $ExePath)) { throw "找不到 $ExePath" }
 
-$ps1 = Join-Path $PSScriptRoot "install-student.ps1"
+# Accept the old -PolicyArgs spelling used by earlier deployments.
+$SetupArgs = $SetupArgs -replace '(?i)(?<!-)-LockWallpaper\b', '--lock-wallpaper' `
+                        -replace '(?i)(?<!-)-InstallDir\b', '--install-dir' `
+                        -replace '(?i)(?<!-)-WallpaperPath\b', '--wallpaper-path' `
+                        -replace '(?i)(?<!-)-Passphrase\b', '--passphrase' `
+                        -replace '(?i)(?<!-)-Usb\b', '--usb' `
+                        -replace '(?i)(?<!-)-Uwf\b', '--uwf'
 $ok = @(); $fail = @()
 
 foreach ($h in $Hosts) {
@@ -46,10 +52,8 @@ foreach ($h in $Hosts) {
     $remoteDir = "\\$h\C$\Windows\Temp\LabCtlDeploy"
     New-Item -ItemType Directory -Force -Path $remoteDir | Out-Null
     Copy-Item $ExePath (Join-Path $remoteDir "labctl-student.exe") -Force
-    Copy-Item $ps1     (Join-Path $remoteDir "install-student.ps1") -Force
-
-    # 在目标机以 SYSTEM 执行安装脚本。
-    $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\LabCtlDeploy\install-student.ps1 $PolicyArgs"
+    # 在目标机以 SYSTEM 执行 EXE 自带安装流程。
+    $cmd = "C:\Windows\Temp\LabCtlDeploy\labctl-student.exe setup --quiet $SetupArgs"
     & $PsExec "\\$h" -s -accepteula -nobanner cmd /c $cmd
     if ($LASTEXITCODE -ne 0) { throw "远程安装返回 $LASTEXITCODE" }
     $ok += $h

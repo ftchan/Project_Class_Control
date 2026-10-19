@@ -15,6 +15,11 @@
 //! the feature install (the WMI classes do not exist before it), then the
 //! agent's startup policy run enables the filter, which applies on the second
 //! reboot. [`state`] reports where a machine is in that sequence.
+//!
+//! The overlay, which holds writes to protected volumes until the next
+//! reboot, is disk-based: a RAM overlay grows in memory and can exhaust it.
+//! UWF always creates the disk overlay file on the system volume; it cannot
+//! be placed on another disk.
 
 use anyhow::Result;
 use labctl_common::policy::UwfScope;
@@ -34,6 +39,11 @@ mod imp {
     static BUSY: AtomicBool = AtomicBool::new(false);
     /// Error from the most recent apply; cleared when one succeeds.
     static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+    /// UWF was turned off for one boot to replace a RAM overlay with a disk one.
+    static SWITCHING_TO_DISK: AtomicBool = AtomicBool::new(false);
+
+    /// `UWF_OverlayConfig.Type` of a disk-based overlay (0 = RAM).
+    const DISK_OVERLAY: u32 = 1;
 
     #[derive(Deserialize, Debug)]
     #[serde(rename = "UWF_Filter")]
@@ -62,6 +72,27 @@ mod imp {
         CurrentSession: Option<bool>,
         DriveLetter: Option<String>,
         Protected: Option<bool>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename = "UWF_OverlayConfig")]
+    #[allow(non_snake_case)]
+    struct OverlayConfig {
+        __Path: String,
+        /// true = settings of the current session, false = next session.
+        CurrentSession: Option<bool>,
+        /// 0 = RAM-based, 1 = disk-based.
+        Type: Option<u32>,
+        /// Maximum overlay size in MB.
+        MaximumSize: Option<i32>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename = "UWF_Overlay")]
+    #[allow(non_snake_case)]
+    struct Overlay {
+        /// Current overlay size in MB.
+        OverlayConsumption: Option<u32>,
     }
 
     /// Output of UWF methods: 0 on success, an error code otherwise.
@@ -107,6 +138,38 @@ mod imp {
         Ok(query_filter()?.CurrentEnabled.unwrap_or(false))
     }
 
+    /// Persist policy.json through an active UWF overlay. Without this, a
+    /// local request to disable UWF would be forgotten at the next reboot.
+    pub fn commit_policy_file() -> Result<()> {
+        if !is_enabled().unwrap_or(false) {
+            return Ok(());
+        }
+        #[derive(serde::Serialize)]
+        #[allow(non_snake_case)]
+        struct CommitArgs<'a> { FileName: &'a str }
+
+        let path = labctl_common::paths::policy_file();
+        let file = path.to_str().ok_or_else(|| anyhow::anyhow!("策略文件路径无法转换为 Unicode"))?;
+        let drive = path.components().next().and_then(|c| c.as_os_str().to_str())
+            .ok_or_else(|| anyhow::anyhow!("无法确定策略文件所在磁盘"))?;
+        let wmi = uwf_wmi()?;
+        let volumes: Vec<UwfVolume> = wmi.query()?;
+        let volume = volumes.iter().find(|v| v.CurrentSession == Some(true)
+            && v.Protected == Some(true)
+            && v.DriveLetter.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(drive)));
+        if let Some(volume) = volume {
+            let out: MethodResult = wmi.exec_instance_method::<UwfVolume, _, _>(
+                "CommitFile", &volume.__Path, CommitArgs { FileName: file })?;
+            check("UWF_Volume.CommitFile()", out.ReturnValue)?;
+        }
+        Ok(())
+    }
+
+    pub fn disable_for_restore() -> Result<()> {
+        if query_filter().is_ok() { set_filter(false)?; }
+        Ok(())
+    }
+
     /// Where this machine is in the enable/disable sequence (see the
     /// `ClientStatus::uwf_state` doc for the values).
     pub fn state() -> String {
@@ -118,6 +181,7 @@ mod imp {
         }
         match query_filter() {
             Ok(f) => match (f.CurrentEnabled.unwrap_or(false), f.NextEnabled.unwrap_or(false)) {
+                (true, false) if SWITCHING_TO_DISK.load(Ordering::Relaxed) => "switching_to_disk",
                 (true, true) => "on",
                 (true, false) => "off_next_boot",
                 (false, true) => "on_next_boot",
@@ -169,6 +233,21 @@ mod imp {
         }
 
         if enabled {
+            // Overlay settings can only change while UWF is off in this
+            // session. A machine already protected with a RAM overlay is
+            // turned off for one boot; the startup apply after that reboot
+            // lands here again with UWF off and switches to a disk overlay.
+            if is_enabled()? {
+                if overlay_config(true)?.Type != Some(DISK_OVERLAY) {
+                    set_filter(false)?;
+                    SWITCHING_TO_DISK.store(true, Ordering::SeqCst);
+                    tracing::info!("RAM overlay in use; UWF off for one boot to switch to a disk overlay");
+                    return Ok(());
+                }
+            } else {
+                configure_disk_overlay()?;
+            }
+
             // Protect the volumes first so the filter never starts with
             // nothing protected.
             let mut failed = Vec::new();
@@ -185,6 +264,85 @@ mod imp {
         }
         tracing::info!(enabled, ?scope, "requested UWF state change (reboot required)");
         Ok(())
+    }
+
+    fn overlay_config(current: bool) -> Result<OverlayConfig> {
+        let rows: Vec<OverlayConfig> = uwf_wmi()?.query()?;
+        rows.into_iter()
+            .find(|c| c.CurrentSession == Some(current))
+            .ok_or_else(|| anyhow::anyhow!("找不到 UWF_OverlayConfig 实例"))
+    }
+
+    /// Use a disk-based overlay from the next session on, sized from the free
+    /// space on the system volume. UWF must be off in the current session.
+    fn configure_disk_overlay() -> Result<()> {
+        let next = overlay_config(false)?;
+        if next.Type == Some(DISK_OVERLAY) && next.MaximumSize.unwrap_or(0) >= 1024 {
+            return Ok(());
+        }
+        let free = system_volume_free_mb()?;
+        let size = super::disk_overlay_size_mb(free).ok_or_else(|| {
+            anyhow::anyhow!("系统盘剩余空间不足（{free} MB），无法建立 UWF 磁盘缓存（至少需要 3072 MB）")
+        })?;
+
+        #[derive(serde::Serialize)]
+        struct SizeArg {
+            size: u32,
+        }
+        #[derive(serde::Serialize)]
+        struct TypeArg {
+            #[serde(rename = "type")]
+            kind: u32,
+        }
+        let wmi = uwf_wmi()?;
+        let out: MethodResult = wmi
+            .exec_instance_method::<OverlayConfig, _, _>("SetMaximumSize", &next.__Path, SizeArg { size })
+            .map_err(|e| anyhow::anyhow!("UWF_OverlayConfig.SetMaximumSize() 调用失败：{e}"))?;
+        check("UWF_OverlayConfig.SetMaximumSize()", out.ReturnValue)?;
+        let out: MethodResult = wmi
+            .exec_instance_method::<OverlayConfig, _, _>("SetType", &next.__Path, TypeArg { kind: DISK_OVERLAY })
+            .map_err(|e| anyhow::anyhow!("UWF_OverlayConfig.SetType() 调用失败：{e}"))?;
+        check("UWF_OverlayConfig.SetType()", out.ReturnValue)?;
+        tracing::info!(size, free, "UWF overlay set to disk-based for the next session");
+        Ok(())
+    }
+
+    /// Free space on the system volume in MB.
+    fn system_volume_free_mb() -> Result<u64> {
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        let root: Vec<u16> = format!("{drive}\\").encode_utf16().chain(Some(0)).collect();
+        let mut free = 0u64;
+        unsafe { GetDiskFreeSpaceExW(PCWSTR(root.as_ptr()), Some(&mut free), None, None)? };
+        Ok(free / (1024 * 1024))
+    }
+
+    /// Overlay type and size in the current session (and the next session
+    /// when it differs), e.g. "磁盘 8192 MB，已用 120 MB".
+    pub fn overlay_info() -> Option<String> {
+        let describe = |c: &OverlayConfig| {
+            let kind = if c.Type == Some(DISK_OVERLAY) { "磁盘" } else { "内存" };
+            format!("{kind} {} MB", c.MaximumSize.unwrap_or(0))
+        };
+        let current = overlay_config(true).ok()?;
+        let mut text = describe(&current);
+        if is_enabled().unwrap_or(false) {
+            let used: Option<u32> = uwf_wmi()
+                .ok()
+                .and_then(|w| w.query::<Overlay>().ok())
+                .and_then(|rows| rows.into_iter().next())
+                .and_then(|o| o.OverlayConsumption);
+            if let Some(used) = used {
+                text.push_str(&format!("，已用 {used} MB"));
+            }
+        }
+        if let Ok(next) = overlay_config(false) {
+            if next.Type != current.Type || next.MaximumSize != current.MaximumSize {
+                text.push_str(&format!("（下次启动：{}）", describe(&next)));
+            }
+        }
+        Some(text)
     }
 
     /// `UWF_Filter.Enable()` / `Disable()`; applies after the next reboot.
@@ -357,6 +515,32 @@ mod imp {
         tracing::info!(restore, delay_secs, "reboot (no-op on this platform)");
         Ok(())
     }
+    pub fn commit_policy_file() -> Result<()> { Ok(()) }
+    pub fn disable_for_restore() -> Result<()> { Ok(()) }
+    pub fn overlay_info() -> Option<String> { None }
 }
 
-pub use imp::{apply, is_enabled, reboot, state};
+pub use imp::{apply, commit_policy_file, disable_for_restore, is_enabled, overlay_info, reboot, state};
+
+/// Disk overlay size for the free space on the system volume: half of it,
+/// between 2 GB and 20 GB, keeping at least 1 GB free beside it. `None` when
+/// the volume is too full for a disk overlay.
+fn disk_overlay_size_mb(free_mb: u64) -> Option<u32> {
+    const MIN_MB: u64 = 2048;
+    const MAX_MB: u64 = 20480;
+    let size = (free_mb / 2).clamp(MIN_MB, MAX_MB);
+    (free_mb >= size + 1024).then_some(size as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::disk_overlay_size_mb;
+
+    #[test]
+    fn disk_overlay_sizes_from_free_space() {
+        assert_eq!(disk_overlay_size_mb(2_000), None);
+        assert_eq!(disk_overlay_size_mb(3_072), Some(2_048));
+        assert_eq!(disk_overlay_size_mb(30_000), Some(15_000));
+        assert_eq!(disk_overlay_size_mb(200_000), Some(20_480));
+    }
+}

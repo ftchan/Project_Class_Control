@@ -32,7 +32,10 @@ pub fn apply_policy(policy: &Policy) -> Vec<String> {
             errors.push(format!("UWF 失败：{e}"));
         }
     }
-    crate::network::apply(policy.block_internet);
+    if let Err(e) = crate::network::apply(policy.block_internet) {
+        tracing::error!(error = %e, "internet policy failed");
+        errors.push(format!("联网策略失败：{e}"));
+    }
     errors
 }
 

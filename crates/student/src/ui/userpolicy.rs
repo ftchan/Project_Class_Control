@@ -67,7 +67,7 @@ fn set_wallpaper_now(path: &str) -> anyhow::Result<()> {
     // crate into the GUI just for this call.
     #[link(name = "user32")]
     extern "system" {
-        fn SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: *mut u16, fWinIni: u32) -> i32;
+        fn SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: *mut core::ffi::c_void, fWinIni: u32) -> i32;
     }
     const SPI_SETDESKWALLPAPER: u32 = 0x0014;
     const SPIF_UPDATEINIFILE: u32 = 0x01;
@@ -77,7 +77,7 @@ fn set_wallpaper_now(path: &str) -> anyhow::Result<()> {
         SystemParametersInfoW(
             SPI_SETDESKWALLPAPER,
             0,
-            wide.as_mut_ptr(),
+            wide.as_mut_ptr().cast(),
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
         )
     };
@@ -91,22 +91,28 @@ fn set_wallpaper_now(path: &str) -> anyhow::Result<()> {
 ///     next Explorer restart / sign-in, per requirement: no Explorer restart),
 ///   * default wallpaper (only if `wallpaper` is given and the file exists).
 #[cfg(windows)]
-pub fn apply_defaults(wallpaper: Option<&str>) {
+pub fn apply_defaults(wallpaper: Option<&str>) -> anyhow::Result<()> {
+    let mut errors = Vec::new();
     if let Err(e) = reset_cursors() {
         tracing::warn!(error = %e, "reset cursors failed");
+        errors.push(format!("鼠标指针：{e}"));
     }
     if let Err(e) = reset_icon_size() {
         tracing::warn!(error = %e, "reset icon size failed");
+        errors.push(format!("图标大小：{e}"));
     }
     if let Some(p) = wallpaper {
         if std::path::Path::new(p).exists() {
             if let Err(e) = set_wallpaper_now(p) {
                 tracing::warn!(error = %e, "set default wallpaper failed");
+                errors.push(format!("默认壁纸：{e}"));
             }
         } else {
-            tracing::info!(path = p, "default wallpaper path missing; skipping");
+            errors.push(format!("默认壁纸不存在：{p}"));
         }
     }
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("；"));
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -160,4 +166,4 @@ fn reset_icon_size() -> anyhow::Result<()> {
 pub fn apply(_p: &Policy) {}
 
 #[cfg(not(windows))]
-pub fn apply_defaults(_wallpaper: Option<&str>) {}
+pub fn apply_defaults(_wallpaper: Option<&str>) -> anyhow::Result<()> { Ok(()) }

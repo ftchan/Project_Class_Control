@@ -25,6 +25,9 @@ pub struct ClientStatus {
     /// "on_next_boot" | "on" | "off_next_boot" | "error:<message>".
     #[serde(default)]
     pub uwf_state: Option<String>,
+    /// UWF overlay type and size, e.g. "磁盘 8192 MB，已用 120 MB".
+    #[serde(default)]
+    pub uwf_overlay: Option<String>,
     /// Failures from the most recent policy apply, in full, for the console.
     #[serde(default)]
     pub errors: Vec<String>,
@@ -52,6 +55,11 @@ pub enum Command {
     QueryStatus,
     /// Push a new policy. The client applies and persists it.
     PushPolicy { policy: Policy },
+    /// Local administrator controls; accepted only from loopback after the
+    /// separate administrator password is checked by the student service.
+    AdminGetPolicy { password: String },
+    AdminSetPolicy { password: String, policy: Policy },
+    AdminRestore { password: String },
     /// Ensure the client's own foreground/lock UI is running and visible.
     LaunchClientUi,
     /// Request a single screen thumbnail at the given max dimension.
@@ -90,6 +98,7 @@ pub enum Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Report {
     Status(ClientStatus),
+    Policy(Policy),
     Thumbnail(ScreenThumbnail),
     /// Positive acknowledgement of a command, optionally with a note.
     Ack { command: String, note: Option<String> },

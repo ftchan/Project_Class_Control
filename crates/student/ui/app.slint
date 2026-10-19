@@ -1,4 +1,4 @@
-import { Button, LineEdit, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 // A content-sized pill: height follows the text, so labels never clip.
 component Pill inherits Rectangle {
@@ -55,7 +55,7 @@ export component MainWindow inherits Window {
     // Resizable: start at the preferred size. The minimum height comes from
     // the content (wrapped text grows when narrow), so nothing gets clipped.
     preferred-width: 460px;
-    preferred-height: 620px;
+    preferred-height: 760px;
     min-width: 360px;
     background: #fafafa;
     icon: root.app-icon;
@@ -72,11 +72,28 @@ export component MainWindow inherits Window {
     in property <string> usb-text: "—";
     in property <string> rev-text: "策略 rev 0";
     in property <bool> busy: false;
+    in-out property <bool> admin-dialog-open: false;
+    in-out property <bool> admin-mode: false;
+    in-out property <string> admin-password;
+    in property <string> admin-error;
+    in-out property <bool> admin-lock-wallpaper: false;
+    in-out property <string> admin-wallpaper-path;
+    in-out property <string> admin-usb: "禁用";
+    in-out property <string> admin-uwf: "开启";
+    in-out property <string> admin-uwf-scope: "仅系统盘";
+    in-out property <bool> admin-task-manager: false;
+    in-out property <bool> admin-block-internet: false;
+    in-out property <string> admin-new-passphrase;
+    in-out property <string> admin-default-wallpaper-path;
     in-out property <string> message: "";
 
     callback unlock(string);
-    callback request-exit();
     callback hide-window();
+    callback about-clicked();
+    callback admin-unlock(string);
+    callback admin-save();
+    callback admin-restore();
+    callback admin-defaults();
     callback try-submit();
 
     in-out property <string> pw;
@@ -146,7 +163,9 @@ export component MainWindow inherits Window {
         if root.locked : Rectangle { vertical-stretch: 1; }
 
         // ---- Main panel ----
-        if !root.locked : VerticalLayout {
+        if !root.locked : ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
             spacing: 16px;
 
             Card {
@@ -201,15 +220,96 @@ export component MainWindow inherits Window {
                 text: root.message; color: #2563eb; font-size: 12px; wrap: word-wrap;
             }
 
-            Rectangle { vertical-stretch: 1; }
-
             HorizontalLayout {
                 spacing: 10px;
                 Button { height: 38px; text: "隐藏到托盘"; horizontal-stretch: 1;
                          clicked => { root.hide-window(); } }
-                Button { height: 38px; text: "退出程序"; horizontal-stretch: 1;
-                         clicked => { root.request-exit(); } }
             }
+
+            if root.admin-mode : Card {
+                vertical-stretch: 0;
+                VerticalLayout {
+                    padding: 14px; spacing: 8px;
+                    Text { text: "管理员模式"; font-size: 15px; font-weight: 700; color: #18181b; }
+                    ScrollView {
+                        height: 275px;
+                        VerticalLayout {
+                            spacing: 8px;
+                            CheckBox { text: "锁定壁纸"; checked <=> root.admin-lock-wallpaper; }
+                            LineEdit { placeholder-text: "本机壁纸路径（可留空）"; text <=> root.admin-wallpaper-path; }
+                            HorizontalLayout {
+                                Text { text: "U 盘"; vertical-alignment: center; }
+                                ComboBox { model: ["允许", "只读", "禁用"]; current-value <=> root.admin-usb; horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                Text { text: "还原保护 UWF"; vertical-alignment: center; }
+                                ComboBox { model: ["开启", "关闭", "不管理"]; current-value <=> root.admin-uwf; horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                Text { text: "保护范围"; vertical-alignment: center; }
+                                ComboBox { model: ["仅系统盘", "所有固定磁盘"]; current-value <=> root.admin-uwf-scope; horizontal-stretch: 1; }
+                            }
+                            CheckBox { text: "禁用任务管理器"; checked <=> root.admin-task-manager; }
+                            CheckBox { text: "禁止互联网访问（保留局域网）"; checked <=> root.admin-block-internet; }
+                            LineEdit { placeholder-text: "新的客户端访问密码（留空则不变）";
+                                       input-type: password; text <=> root.admin-new-passphrase; }
+                            LineEdit { placeholder-text: "默认壁纸的本机路径（可留空）";
+                                       text <=> root.admin-default-wallpaper-path; }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "保存本机设置"; enabled: !root.busy; clicked => { root.admin-save(); } }
+                        Button { text: "一键恢复初始状态"; enabled: !root.busy; clicked => { root.admin-restore(); } }
+                    }
+                    Button { text: "恢复桌面默认（鼠标、图标、壁纸）"; enabled: !root.busy;
+                             clicked => { root.admin-defaults(); } }
+                    Text { text: "一键恢复会在 60 秒后重启；请先保存其他程序中的工作。";
+                           font-size: 11px; color: #71717a; wrap: word-wrap; }
+                }
+            }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+        Rectangle {
+            height: 24px;
+            about-text := Text { text: "关于"; font-size: 12px; color: #a1a1aa;
+                                 horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { root.about-clicked(); } }
+        }
+    }
+
+    if root.admin-dialog-open : Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: #00000080;
+        TouchArea { width: parent.width; height: parent.height; }
+        VerticalLayout {
+            alignment: center;
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                Rectangle { horizontal-stretch: 1; }
+            Card {
+                width: 360px;
+                horizontal-stretch: 0;
+                VerticalLayout {
+                    padding: 20px; spacing: 12px;
+                    Text { text: "管理员验证"; font-size: 16px; font-weight: 700; }
+                    LineEdit { placeholder-text: "管理员密码"; input-type: password;
+                               text <=> root.admin-password;
+                               accepted => { root.admin-unlock(root.admin-password); } }
+                    if root.admin-error != "" : Text { text: root.admin-error; color: #dc2626; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "取消"; clicked => { root.admin-dialog-open = false; root.admin-password = ""; } }
+                        Button { text: "进入"; primary: true;
+                                 clicked => { root.admin-unlock(root.admin-password); } }
+                    }
+                }
+            }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { vertical-stretch: 1; }
         }
     }
 

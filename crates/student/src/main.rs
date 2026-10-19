@@ -31,6 +31,8 @@ mod lock;
 mod ui;
 #[cfg(windows)]
 mod service;
+#[cfg(windows)]
+mod setup;
 
 use anyhow::Result;
 
@@ -47,11 +49,16 @@ fn attach_parent_console() {
 fn attach_parent_console() {}
 
 fn main() -> Result<()> {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "run".into());
+    let mode = std::env::args().nth(1).unwrap_or_else(|| {
+        #[cfg(windows)]
+        { return if service::is_running() { "open" } else { "setup" }.into(); }
+        #[cfg(not(windows))]
+        { "run".into() }
+    });
 
     // GUI and service modes have no console; everything else attaches to the
     // parent terminal so its output is visible.
-    if !matches!(mode.as_str(), "ui" | "service") {
+    if !matches!(mode.as_str(), "ui" | "service" | "open") {
         attach_parent_console();
     }
 
@@ -62,10 +69,14 @@ fn main() -> Result<()> {
         "install" => return service::install(),
         #[cfg(windows)]
         "uninstall" => return service::uninstall(),
+        #[cfg(windows)]
+        "setup" => return setup::run(),
+        #[cfg(windows)]
+        "open" => return setup::open_ui(),
         "doctor" => return doctor(),
         "ui" => {
             init_tracing(ui_log_file());
-            let show = std::env::args().any(|a| a == "--show");
+            let show = std::env::args().any(|a| a == "--show") || std::env::args().len() == 1;
             return ui::run_gui(show);
         }
         "hash" => {

@@ -113,6 +113,24 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
     match cmd {
         Command::QueryStatus => Report::Status(status(state).await),
         Command::PushPolicy { policy } => apply_push(state, policy).await,
+        Command::AdminGetPolicy { password } => {
+            if let Err(e) = verify_local_admin(peer, &password) {
+                return Report::Error { command: "admin_get_policy".into(), message: e.to_string() };
+            }
+            Report::Policy(state.policy.lock().await.clone())
+        }
+        Command::AdminSetPolicy { password, policy } => {
+            if let Err(e) = verify_local_admin(peer, &password) {
+                return Report::Error { command: "admin_set_policy".into(), message: e.to_string() };
+            }
+            apply_admin_policy(state, policy, false).await
+        }
+        Command::AdminRestore { password } => {
+            if let Err(e) = verify_local_admin(peer, &password) {
+                return Report::Error { command: "admin_restore".into(), message: e.to_string() };
+            }
+            apply_admin_policy(state, restored_policy(), true).await
+        }
         Command::LaunchClientUi => match launch_ui() {
             Ok(()) => Report::Ack { command: "launch_client_ui".into(), note: None },
             Err(e) => Report::Error { command: "launch_client_ui".into(), message: e.to_string() },
@@ -153,6 +171,58 @@ async fn dispatch(state: &State, cmd: Command, peer: Option<std::net::SocketAddr
     }
 }
 
+fn verify_local_admin(peer: Option<std::net::SocketAddr>, password: &str) -> Result<()> {
+    anyhow::ensure!(peer.is_some_and(|p| p.ip().is_loopback()), "管理员操作仅允许本机执行");
+    anyhow::ensure!(password == "jxzx5678", "管理员密码错误");
+    Ok(())
+}
+
+fn restored_policy() -> Policy {
+    Policy { uwf_enabled: Some(false), ..Policy::default() }
+}
+
+async fn apply_admin_policy(state: &State, mut policy: Policy, restore: bool) -> Report {
+    let mut guard = state.policy.lock().await;
+    policy.revision = guard.revision.saturating_add(1);
+    if !restore && policy.config_passphrase_hash.is_none() {
+        policy.config_passphrase_hash = guard.config_passphrase_hash.clone();
+    }
+    // Save before applying, so the service will enforce the same policy after
+    // a restart. UWF-protected disks also need a file commit before reboot.
+    if let Err(e) = config::save(&policy).and_then(|()| features::uwf::commit_policy_file()) {
+        let _ = config::save(&guard);
+        return Report::Error { command: "admin_policy".into(), message: e.to_string() };
+    }
+    if restore {
+        if let Err(e) = features::uwf::disable_for_restore() {
+            let _ = config::save(&guard);
+            return Report::Error { command: "admin_restore".into(), message: e.to_string() };
+        }
+    }
+    *guard = policy.clone();
+    drop(guard);
+    let errors = tokio::task::spawn_blocking(move || features::apply_policy(&policy))
+        .await.unwrap_or_else(|e| vec![e.to_string()]);
+    *state.last_errors.lock().unwrap() = errors.clone();
+    if restore {
+        if let Err(e) = forward_defaults_to_ui(None) {
+            tracing::warn!(error = %e, "could not restore current user's desktop defaults");
+        }
+    }
+    if restore && errors.is_empty() {
+        if let Err(e) = features::reboot_and_restore(false, 60) {
+            return Report::Error { command: "admin_restore".into(), message: format!("设置已恢复，但安排重启失败：{e}") };
+        }
+    }
+    if errors.is_empty() {
+        Report::Ack { command: "admin_policy".into(), note: Some(if restore {
+            "已恢复允许 U 盘、联网和任务管理器；60 秒后重启以完成 UWF 关闭".into()
+        } else { "管理员设置已保存".into() }) }
+    } else {
+        Report::Error { command: "admin_policy".into(), message: errors.join("；") }
+    }
+}
+
 async fn apply_push(state: &State, mut incoming: Policy) -> Report {
     // Materialize any transferred wallpaper image to a LOCAL file and rewrite
     // the path, so students never point at a teacher-only path (which blanks
@@ -190,6 +260,7 @@ async fn status(state: &State) -> ClientStatus {
         policy_revision: policy.revision,
         uwf_enabled: features::current_uwf_enabled(),
         uwf_state: Some(features::uwf_state()),
+        uwf_overlay: features::uwf::overlay_info(),
         errors: state.last_errors.lock().unwrap().clone(),
         session_locked: lock::configured_hash().is_some(),
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -310,7 +381,11 @@ fn launch_ui() -> Result<()> {
             return Ok(());
         }
     }
-    anyhow::ensure!(!in_session_zero(), "学生端界面未运行（它会在学生登录时自动启动）");
+    #[cfg(windows)]
+    if in_session_zero() {
+        anyhow::ensure!(crate::service::launch_ui_in_console_session(true)?, "当前没有已登录的学生用户");
+        return Ok(());
+    }
     // Running in a user session (`run` mode): start the GUI (same binary,
     // ui mode) next to this executable.
     let exe = std::env::current_exe()?;
@@ -502,4 +577,30 @@ fn load_or_create_machine_id() -> Uuid {
     }
     let _ = std::fs::write(&path, id.to_string());
     id
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::{restored_policy, verify_local_admin};
+    use labctl_common::policy::UsbStoragePolicy;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn administrator_commands_require_loopback_and_password() {
+        let local = SocketAddr::from(([127, 0, 0, 1], 12345));
+        let remote = SocketAddr::from(([192, 0, 2, 1], 12345));
+        assert!(verify_local_admin(Some(local), "jxzx5678").is_ok());
+        assert!(verify_local_admin(Some(remote), "jxzx5678").is_err());
+        assert!(verify_local_admin(Some(local), "wrong").is_err());
+    }
+
+    #[test]
+    fn restore_releases_managed_restrictions() {
+        let p = restored_policy();
+        assert_eq!(p.usb_storage, UsbStoragePolicy::Allow);
+        assert_eq!(p.uwf_enabled, Some(false));
+        assert!(!p.disable_task_manager);
+        assert!(!p.block_internet);
+        assert!(!p.lock_wallpaper);
+    }
 }

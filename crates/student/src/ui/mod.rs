@@ -11,11 +11,12 @@ mod userpolicy;
 
 slint::include_modules!();
 
-use labctl_common::policy::{Policy, UsbStoragePolicy};
+use labctl_common::policy::{Policy, UsbStoragePolicy, UwfScope};
 use labctl_common::protocol::{Command, Report};
 use slint::{CloseRequestResponse, Timer, TimerMode, Weak};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -49,6 +50,7 @@ pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
 
     wire_unlock(&ui, gate.clone());
     wire_window_buttons(&ui);
+    wire_admin(&ui);
 
     let _tray_guard = start_tray(ui.as_weak());
     let refresh_timer = refresh_timer(ui.as_weak());
@@ -59,7 +61,7 @@ pub fn run_gui(show_on_start: bool) -> anyhow::Result<()> {
         ui.show()?;
     }
     // Keep running with every window hidden: the client lives in the tray and
-    // must keep enforcing per-user policy. Only the tray "exit" item quits.
+    // must keep enforcing per-user policy.
     slint::run_event_loop_until_quit()?;
 
     drop(refresh_timer);
@@ -112,14 +114,173 @@ fn wire_window_buttons(ui: &MainWindow) {
     let hide_w = ui.as_weak();
     ui.on_hide_window(move || hide_and_lock(&hide_w));
 
-    ui.on_request_exit(move || {
-        let _ = slint::quit_event_loop();
-    });
-
     let close_w = ui.as_weak();
     ui.window().on_close_requested(move || {
         hide_and_lock(&close_w);
         CloseRequestResponse::HideWindow
+    });
+}
+
+fn show_admin_policy(ui: &MainWindow, p: &Policy) {
+    ui.set_admin_lock_wallpaper(p.lock_wallpaper);
+    ui.set_admin_wallpaper_path(p.wallpaper_path.as_deref().unwrap_or("").into());
+    ui.set_admin_usb(match p.usb_storage {
+        UsbStoragePolicy::Allow => "允许", UsbStoragePolicy::ReadOnly => "只读", UsbStoragePolicy::Deny => "禁用",
+    }.into());
+    ui.set_admin_uwf(match p.uwf_enabled { Some(true) => "开启", Some(false) => "关闭", None => "不管理" }.into());
+    ui.set_admin_uwf_scope(match p.uwf_scope {
+        UwfScope::SystemOnly => "仅系统盘", UwfScope::AllVolumes => "所有固定磁盘",
+    }.into());
+    ui.set_admin_task_manager(p.disable_task_manager);
+    ui.set_admin_block_internet(p.block_internet);
+    ui.set_admin_new_passphrase("".into());
+    ui.set_admin_default_wallpaper_path("".into());
+    apply_policy_display(ui, p);
+}
+
+fn wire_admin(ui: &MainWindow) {
+    let clicks = Rc::new(Cell::new(0u8));
+    let secret = Rc::new(RefCell::new(None::<String>));
+    let current = Arc::new(Mutex::new(None::<Policy>));
+
+    let w = ui.as_weak();
+    let count = clicks.clone();
+    ui.on_about_clicked(move || {
+        let next = count.get() + 1;
+        count.set(if next >= 5 { 0 } else { next });
+        if next >= 5 {
+            if let Some(ui) = w.upgrade() {
+                ui.set_admin_error("".into());
+                ui.set_admin_password("".into());
+                ui.set_admin_dialog_open(true);
+            }
+        }
+    });
+
+    let w = ui.as_weak();
+    let secret_for_unlock = secret.clone();
+    let current_for_unlock = current.clone();
+    ui.on_admin_unlock(move |password| {
+        let Some(ui) = w.upgrade() else { return };
+        let pw = password.to_string();
+        match ipc::send(Command::AdminGetPolicy { password: pw.clone() }) {
+            Ok(Report::Policy(policy)) => {
+                show_admin_policy(&ui, &policy);
+                *current_for_unlock.lock().unwrap() = Some(policy);
+                *secret_for_unlock.borrow_mut() = Some(pw);
+                ui.set_admin_password("".into());
+                ui.set_admin_error("".into());
+                ui.set_admin_dialog_open(false);
+                ui.set_locked(false);
+                ui.set_admin_mode(true);
+            }
+            Ok(Report::Error { message, .. }) => ui.set_admin_error(message.into()),
+            Ok(_) => ui.set_admin_error("服务返回了意外响应".into()),
+            Err(e) => ui.set_admin_error(format!("无法连接学生端服务：{e}").into()),
+        }
+    });
+
+    let w = ui.as_weak();
+    let secret_for_save = secret.clone();
+    let current_for_save = current.clone();
+    ui.on_admin_save(move || {
+        let Some(ui) = w.upgrade() else { return };
+        if !ui.get_admin_mode() { return; }
+        let Some(password) = secret_for_save.borrow().clone() else { return };
+        let Some(mut policy) = current_for_save.lock().unwrap().clone() else { return };
+        policy.lock_wallpaper = ui.get_admin_lock_wallpaper();
+        policy.wallpaper_path = Some(ui.get_admin_wallpaper_path().to_string()).filter(|s| !s.trim().is_empty());
+        policy.usb_storage = match ui.get_admin_usb().as_str() {
+            "允许" => UsbStoragePolicy::Allow, "只读" => UsbStoragePolicy::ReadOnly, _ => UsbStoragePolicy::Deny,
+        };
+        policy.uwf_enabled = match ui.get_admin_uwf().as_str() {
+            "开启" => Some(true), "关闭" => Some(false), _ => None,
+        };
+        policy.uwf_scope = if ui.get_admin_uwf_scope().as_str() == "所有固定磁盘" {
+            UwfScope::AllVolumes
+        } else { UwfScope::SystemOnly };
+        policy.disable_task_manager = ui.get_admin_task_manager();
+        policy.block_internet = ui.get_admin_block_internet();
+        let new_passphrase = ui.get_admin_new_passphrase().to_string();
+        ui.set_busy(true);
+        ui.set_message("正在保存管理员设置…".into());
+        let w = w.clone();
+        let current = current_for_save.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<(Report, Option<Policy>)> {
+                if !new_passphrase.is_empty() {
+                    policy.config_passphrase_hash = Some(labctl_common::auth::hash_passphrase(&new_passphrase)?);
+                }
+                let report = ipc::send(Command::AdminSetPolicy { password: password.clone(), policy })?;
+                let updated = if matches!(report, Report::Ack { .. }) {
+                    match ipc::send(Command::AdminGetPolicy { password })? { Report::Policy(p) => Some(p), _ => None }
+                } else { None };
+                Ok((report, updated))
+            })();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = w.upgrade() {
+                    ui.set_busy(false);
+                    match result {
+                        Ok((Report::Ack { note, .. }, Some(p))) => {
+                            show_admin_policy(&ui, &p);
+                            *current.lock().unwrap() = Some(p);
+                            ui.set_message(note.unwrap_or_else(|| "设置已保存".into()).into());
+                        }
+                        Ok((Report::Error { message, .. }, _)) => ui.set_message(message.into()),
+                        Ok(_) => ui.set_message("设置已提交，但刷新策略失败".into()),
+                        Err(e) => ui.set_message(format!("保存失败：{e}").into()),
+                    }
+                }
+            });
+        });
+    });
+
+    let w = ui.as_weak();
+    let secret_for_restore = secret.clone();
+    let current_for_restore = current.clone();
+    ui.on_admin_restore(move || {
+        let Some(ui) = w.upgrade() else { return };
+        if !ui.get_admin_mode() { return; }
+        let Some(password) = secret_for_restore.borrow().clone() else { return };
+        ui.set_busy(true);
+        ui.set_message("正在恢复初始状态…".into());
+        let w = w.clone();
+        let current = current_for_restore.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<(Report, Option<Policy>)> {
+                let report = ipc::send(Command::AdminRestore { password: password.clone() })?;
+                let updated = if matches!(report, Report::Ack { .. }) {
+                    match ipc::send(Command::AdminGetPolicy { password })? { Report::Policy(p) => Some(p), _ => None }
+                } else { None };
+                Ok((report, updated))
+            })();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = w.upgrade() {
+                    ui.set_busy(false);
+                    match result {
+                        Ok((Report::Ack { note, .. }, Some(p))) => {
+                            show_admin_policy(&ui, &p);
+                            *current.lock().unwrap() = Some(p);
+                            ui.set_message(note.unwrap_or_else(|| "已恢复初始状态".into()).into());
+                        }
+                        Ok((Report::Error { message, .. }, _)) => ui.set_message(message.into()),
+                        Ok(_) => ui.set_message("恢复已提交，但刷新策略失败".into()),
+                        Err(e) => ui.set_message(format!("恢复失败：{e}").into()),
+                    }
+                }
+            });
+        });
+    });
+
+    let w = ui.as_weak();
+    ui.on_admin_defaults(move || {
+        let Some(ui) = w.upgrade() else { return };
+        if !ui.get_admin_mode() { return; }
+        let path = ui.get_admin_default_wallpaper_path().to_string();
+        match userpolicy::apply_defaults(if path.trim().is_empty() { None } else { Some(&path) }) {
+            Ok(()) => ui.set_message("已恢复桌面默认设置；图标大小可能要重新登录后生效".into()),
+            Err(e) => ui.set_message(format!("恢复桌面默认设置失败：{e}").into()),
+        }
     });
 }
 
@@ -130,6 +291,9 @@ fn hide_and_lock(ui_w: &Weak<MainWindow>) {
         u.set_pw("".into());
         u.set_pw2("".into());
         u.set_message("".into());
+        u.set_admin_mode(false);
+        u.set_admin_dialog_open(false);
+        u.set_admin_password("".into());
         let _ = u.hide();
     }
 }
@@ -173,6 +337,7 @@ fn uwf_label(state: &str) -> (String, bool, String) {
         "off" => "已关闭",
         "installing" => "正在安装 UWF 功能…",
         "install_pending_reboot" => "功能已安装，重启后启用",
+        "switching_to_disk" => "切换为磁盘缓存，需重启",
         "not_installed" => "未安装",
         other => other,
     };
@@ -251,6 +416,7 @@ fn refresh_gate(ui_w: &Weak<MainWindow>, gate: &Rc<RefCell<store::Gate>>, p: &Po
     ui.set_first_run(gate.borrow().first_run());
     if changed {
         ui.set_locked(true);
+        ui.set_admin_mode(false);
         ui.set_pw("".into());
         ui.set_pw2("".into());
         ui.set_message(if teacher_managed { "访问密码已由教师端更新" } else { "" }.into());
@@ -264,10 +430,8 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
     use tray_icon::menu::{Menu, MenuItem};
 
     let show = MenuItem::new("显示主界面", true, None);
-    let exit = MenuItem::new("退出程序", true, None);
     let menu = Menu::new();
     let _ = menu.append(&show);
-    let _ = menu.append(&exit);
 
     let tray = tray_icon::TrayIconBuilder::new()
         .with_tooltip("机房学生端")
@@ -283,7 +447,7 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
         }
     };
 
-    let (show_id, exit_id) = (show.id().clone(), exit.id().clone());
+    let show_id = show.id().clone();
     let menu_rx = tray_icon::menu::MenuEvent::receiver();
     let tray_rx = tray_icon::TrayIconEvent::receiver();
     let timer = Timer::default();
@@ -291,15 +455,6 @@ fn start_tray(ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
         while let Ok(ev) = menu_rx.try_recv() {
             if ev.id == show_id {
                 show_and_lock(&ui_w);
-            } else if ev.id == exit_id {
-                if let Some(u) = ui_w.upgrade() {
-                    if u.get_locked() {
-                        let _ = u.show();
-                        u.set_message("退出前请先输入密码".into());
-                    } else {
-                        let _ = slint::quit_event_loop();
-                    }
-                }
             }
         }
         while let Ok(ev) = tray_rx.try_recv() {
@@ -338,6 +493,7 @@ fn start_tray(_ui_w: Weak<MainWindow>) -> Box<dyn std::any::Any> {
 fn show_and_lock(ui_w: &Weak<MainWindow>) {
     if let Some(u) = ui_w.upgrade() {
         u.set_locked(true);
+        u.set_admin_mode(false);
         u.set_pw("".into());
         u.set_pw2("".into());
         u.set_message("".into());
@@ -373,7 +529,11 @@ fn spawn_control_listener(ui_w: Weak<MainWindow>) {
                     } else if let Some(rest) = msg.strip_prefix("defaults") {
                         let path = rest.trim().trim_start_matches('\t').trim();
                         let path = (!path.is_empty()).then(|| path.to_string());
-                        std::thread::spawn(move || userpolicy::apply_defaults(path.as_deref()));
+                        std::thread::spawn(move || {
+                            if let Err(e) = userpolicy::apply_defaults(path.as_deref()) {
+                                tracing::warn!(error = %e, "apply defaults failed");
+                            }
+                        });
                     } else if msg == "show" {
                         let w = ui_w.clone();
                         let _ = slint::invoke_from_event_loop(move || show_and_lock(&w));
